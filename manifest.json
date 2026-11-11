@@ -1,0 +1,9 @@
+{
+  "id": "mermaid-plus",
+  "name": "Mermaid Plus",
+  "version": "0.1.0",
+  "minAppVersion": "1.5.0",
+  "description": "Experimental preview of Mermaid text styles stored in comments. Does not modify notes.",
+  "author": "Mermaid Plus contributors",
+  "isDesktopOnly": true
+}

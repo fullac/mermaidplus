@@ -1,0 +1,7 @@
+# 用途：排除依赖、构建产物和本机缓存。
+node_modules/
+dist/
+.DS_Store
+*.tsbuildinfo
+test-results/
+playwright-report/
