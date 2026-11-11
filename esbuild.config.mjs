@@ -13,9 +13,8 @@ const ctx = await context({
   external: ['obsidian'],
   sourcemap: false,
   logLevel: 'info',
-  banner: { js: '/* Bundled dependency licenses:\n' + (await Promise.all(
-    ['@dagrejs/dagre', '@dagrejs/graphlib'].map(async name => `${name}\n${await readFile(`node_modules/${name}/LICENSE`, 'utf8')}`),
-  )).join('\n') + '\n*/' },
+  banner: { js: '/* Bundled elkjs 0.12.1, unmodified: https://github.com/kieler/elkjs/tree/v0.12.1\n'
+    + await readFile('node_modules/elkjs/LICENSE.md', 'utf8') + '\n*/' },
 });
 if (process.argv.includes('--watch')) await ctx.watch();
 else { await ctx.rebuild(); await ctx.dispose(); }

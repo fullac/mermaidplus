@@ -1,19 +1,18 @@
 // 用途：根据样式注释测量节点文字并生成安全的矢量流程图，不执行标签中的 HTML。
-import dagre from '@dagrejs/dagre';
 import { readAnnotations, resolveStyles } from './annotations';
 import { parseFlowchart } from './flowchart';
+import { edgePath, defaultLayoutSettings, type LayoutSettings, type Size } from './layout';
+import { layoutInWorker } from './layout-worker';
 
 let serial = 0;
 const svgNS = 'http://www.w3.org/2000/svg';
 
-export function renderEnhanced(container: HTMLElement, source: string): string[] {
+export async function renderEnhanced(container: HTMLElement, source: string, settings: LayoutSettings = defaultLayoutSettings, signal?: AbortSignal): Promise<string[]> {
   container.replaceChildren();
   const doc = container.ownerDocument;
   const chart = parseFlowchart(source);
   const { annotations, warnings } = readAnnotations(source);
-  const graph = new dagre.graphlib.Graph({ multigraph: true });
-  graph.setGraph({ rankdir: chart.direction, nodesep: 36, ranksep: 72, marginx: 24, marginy: 24 });
-  graph.setDefaultEdgeLabel(() => ({}));
+  const sizes = new Map<string, Size>();
   const labels = new Map<string, HTMLDivElement>();
   const measuring = doc.createElement('div');
   measuring.className = 'mp-measuring';
@@ -23,6 +22,7 @@ export function renderEnhanced(container: HTMLElement, source: string): string[]
       const label = doc.createElement('div');
       label.className = 'mp-node-label';
       label.style.width = 'max-content';
+      label.style.maxWidth = node.shape === 'diamond' ? '180px' : '240px';
       const annotation = annotations.find(a => a.node === node.id);
       let styles = annotation?.styles ?? [];
       if (annotation && annotation.label !== node.label) {
@@ -39,22 +39,26 @@ export function renderEnhanced(container: HTMLElement, source: string): string[]
       measuring.append(label);
       const width = Math.max(80, Math.max(label.offsetWidth, label.scrollWidth) + 32);
       const height = Math.max(52, Math.max(label.offsetHeight, label.scrollHeight) + 24);
-      const factor = node.shape === 'diamond' ? 1.65 : 1;
-      graph.setNode(node.id, { width: width * factor, height: height * factor });
+      const factor = node.shape === 'diamond' ? 2 : 1;
+      sizes.set(node.id, { width: width * factor, height: height * factor });
       labels.set(node.id, label);
     }
     for (const a of annotations) if (!labels.has(a.node)) warnings.push(`找不到节点 ${a.node}，样式已跳过。`);
-    chart.edges.forEach((edge, index) => graph.setEdge(edge.from, edge.to, {
-      label: edge.label, width: edge.label.length * 14, height: edge.label ? 24 : 0,
-    }, String(index)));
-    dagre.layout(graph);
+    const edgeSizes = chart.edges.map(edge => {
+      const label = doc.createElement('span'); label.className = 'mp-edge-measure'; label.textContent = edge.label;
+      measuring.append(label);
+      return { width: label.offsetWidth + 12, height: label.offsetHeight + 8 };
+    });
+    const layout = await layoutInWorker(chart, sizes, edgeSizes, settings, { width: container.clientWidth || 600, height: 680 }, signal);
     const svg = doc.createElementNS(svgNS, 'svg');
     svg.classList.add('mp-diagram');
     svg.setAttribute('role', 'img');
     svg.setAttribute('aria-label', '注释样式增强流程图');
-    const size = graph.graph();
-    svg.setAttribute('viewBox', `0 0 ${size.width ?? 1} ${size.height ?? 1}`);
-    svg.style.maxWidth = `${size.width}px`;
+    svg.setAttribute('viewBox', `0 0 ${layout.width} ${layout.height}`);
+    svg.style.maxWidth = `${layout.width}px`;
+    // 大图最多缩小到 80%，剩余区域滚动查看，避免为了塞进半栏而让文字不可读。
+    svg.style.width = `${Math.max(layout.width * .8, Math.min(layout.width, container.clientWidth || layout.width))}px`;
+    svg.dataset.direction = layout.direction;
     const make = (tag: string, attrs: Record<string, string | number>) => {
       const element = doc.createElementNS(svgNS, tag);
       for (const [key, value] of Object.entries(attrs)) element.setAttribute(key, String(value));
@@ -66,29 +70,21 @@ export function renderEnhanced(container: HTMLElement, source: string): string[]
     });
     marker.append(make('path', { d: 'M 0 0 L 10 5 L 0 10 z', fill: 'currentColor' }));
     defs.append(marker); svg.append(defs);
-    chart.edges.forEach((edge, index) => {
-      const layout = graph.edge({ v: edge.from, w: edge.to, name: String(index) });
-      const points: { x: number; y: number }[] = layout.points.map((p: { x: number; y: number }) => ({ ...p }));
-      // 布局器按矩形边界截线；菱形需要重新计算与实际边框的交点。
-      for (const [id, endpoint, neighbor] of [[edge.from, 0, 1], [edge.to, points.length - 1, points.length - 2]] as const) {
-        if (chart.nodes.find(n => n.id === id)?.shape !== 'diamond') continue;
-        const box = graph.node(id), toward = points[neighbor];
-        if (!toward) continue;
-        const dx = toward.x - box.x, dy = toward.y - box.y;
-        const divisor = Math.abs(dx) / (box.width / 2) + Math.abs(dy) / (box.height / 2);
-        if (divisor > 0) points[endpoint] = { x: box.x + dx/divisor, y: box.y + dy/divisor };
-      }
-      const path = make('path', { d: points.map((p, i) => `${i ? 'L' : 'M'} ${p.x} ${p.y}`).join(' '), class: 'mp-edge' });
+    for (const route of layout.edges) {
+      const edge = chart.edges[route.index]!;
+      const path = make('path', { d: edgePath(route.points, settings.lines === 'rounded' ? 8 : 0), class: 'mp-edge', 'data-edge-index': route.index });
       if (edge.arrow) path.setAttribute('marker-end', `url(#${arrowId})`);
       svg.append(path);
-      if (edge.label) {
-        const text = make('text', { x: layout.x ?? 0, y: layout.y ?? 0, class: 'mp-edge-label', 'text-anchor': 'middle' });
+      if (edge.label && route.label) {
+        const box = route.label;
+        svg.append(make('rect', { x: box.x, y: box.y, width: box.width, height: box.height, rx: 4, class: 'mp-edge-label-bg' }));
+        const text = make('text', { x: box.x + box.width/2, y: box.y + box.height/2, class: 'mp-edge-label', 'text-anchor': 'middle', 'dominant-baseline': 'central' });
         text.textContent = edge.label; svg.append(text);
       }
-    });
+    }
     for (const node of chart.nodes) {
-      const box = graph.node(node.id);
-      const group = make('g', { 'data-node-id': node.id, transform: `translate(${box.x - box.width/2},${box.y - box.height/2})` });
+      const box = layout.nodes.find(box => box.id === node.id)!;
+      const group = make('g', { 'data-node-id': node.id, transform: `translate(${box.x},${box.y})` });
       const shape = node.shape === 'diamond'
         ? make('polygon', { points: `${box.width/2},0 ${box.width},${box.height/2} ${box.width/2},${box.height} 0,${box.height/2}`, class: 'mp-node-shape' })
         : make('rect', { width: box.width, height: box.height, rx: node.shape === 'round' ? 20 : 6, class: 'mp-node-shape' });

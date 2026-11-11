@@ -3,20 +3,26 @@
 .mp-playground h2 { font-size: 24px; margin: 0 0 12px; }
 .mp-playground h3 { margin: 0 0 16px; font-size: 15px; }
 .mp-intro { color: var(--text-muted, #647269); line-height: 1.7; }
-.mp-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 24px; }
+.mp-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 24px; align-items: start; }
 .mp-columns section { min-width: 0; padding: 20px; background: var(--mp-bg); border: 1px solid var(--mp-border); border-radius: 12px; }
-.mp-preview { min-height: 310px; overflow: auto; display: flex; justify-content: center; align-items: flex-start; }
+.mp-preview { min-height: 310px; max-height: 680px; overflow: auto; display: flex; justify-content: center; align-items: flex-start; }
+.mp-enhanced { display: block; }
+.mp-focus-enhanced .mp-columns { grid-template-columns: 1fr; }
+.mp-focus-enhanced .mp-columns > section:first-child { display: none; }
+.mp-focus-enhanced .mp-enhanced { max-height: none; }
 .mp-preview > svg { width: 100%; height: auto; flex-shrink: 0; }
 .mp-diagram { color: var(--mp-ink); }
 .mp-node-content { height: 100%; display: flex; align-items: center; justify-content: center; }
-.mp-node-label { font: 15px/1.7 system-ui, sans-serif; white-space: pre; color: var(--mp-ink); }
+.mp-node-label { font: 15px/1.7 system-ui, sans-serif; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--mp-ink); }
 .mp-style-code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; background: #e6ebe8; color: #24483c; border-radius: 3px; padding: 1px 3px; }
 .mp-style-bold { font-weight: 700; }
 .mp-style-italic { font-style: italic; }
 .mp-style-highlight { background: #f7df73; color: #302b1b; border-radius: 2px; }
 .mp-node-shape { fill: var(--mp-bg); stroke: #608579; stroke-width: 1.5px; }
 .mp-edge { fill: none; stroke: #608579; stroke-width: 1.5px; }
-.mp-edge-label { font: 13px system-ui; fill: var(--mp-ink); paint-order: stroke; stroke: var(--mp-bg); stroke-width: 4px; }
+.mp-edge-label { font: 13px system-ui; fill: var(--mp-ink); }
+.mp-edge-label-bg { fill: var(--mp-bg); }
+.mp-edge-measure { display: inline-block; font: 13px system-ui; white-space: pre; }
 .mp-status { min-height: 24px; line-height: 1.6; font-size: 13px; }
 .mp-controls, .mp-actions { display: flex; gap: 12px; flex-wrap: wrap; align-items: end; margin: 18px 0; }
 .mp-controls label { display: grid; gap: 6px; font-size: 13px; }
@@ -26,6 +32,8 @@
 .mp-playground button:disabled { opacity: .45; cursor: default; }
 .mp-source-label { display: grid; gap: 10px; font-size: 13px; }
 .mp-source-label textarea { box-sizing: border-box; width: 100%; min-height: 240px; resize: vertical; padding: 16px; border: 1px solid var(--mp-border); border-radius: 8px; background: var(--mp-bg); color: var(--mp-ink); font: 12px/1.7 ui-monospace, monospace; }
-.mp-measuring, .mp-native-staging { position: absolute; left: -20000px; top: 0; visibility: hidden; width: max-content; }
+.mp-measuring, .mp-native-staging, .mp-enhanced-staging { position: absolute; left: -20000px; top: 0; visibility: hidden; width: max-content; }
+.mp-layout-controls { padding: 16px 0; border-bottom: 1px solid var(--mp-border); }
+.mp-layout-controls > button { background: #315f4f; color: #fff; border-color: #315f4f; }
 .mp-modal { width: min(1200px, 94vw); max-width: 94vw; }
 @media (max-width: 800px) { .mp-columns { grid-template-columns: 1fr; } }

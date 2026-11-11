@@ -10,10 +10,12 @@
     body { margin: 0; padding: 40px 32px; background: #f1f3ef; }
     main { max-width: 1200px; margin: auto; }
     .demo-kicker { color: #547367; font: 12px system-ui; letter-spacing: .12em; margin: 0 0 18px; }
+    nav { display: flex; gap: 12px; margin-bottom: 24px; }
+    nav button { padding: 8px 14px; border: 1px solid #b7c7bd; border-radius: 6px; background: transparent; color: #315f4f; cursor: pointer; }
   </style>
 </head>
 <body>
-  <main><p class="demo-kicker">MERMAID PLUS / EXPERIMENT 01</p><div id="app"></div></main>
+  <main><p class="demo-kicker">MERMAID PLUS / EXPERIMENT 02</p><nav aria-label="测试样例"><button id="style-example">样式示例</button><button id="layout-example">多分支与回路示例</button></nav><div id="app"></div></main>
   <script type="module" src="/app.js"></script>
 </body>
 </html>
