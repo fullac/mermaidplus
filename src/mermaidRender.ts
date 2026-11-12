@@ -28,9 +28,11 @@ export interface RenderSettings {
   vertical: boolean;
   /** 自动选横竖：直角走线时两个方向各排一次，选放进笔记栏后更合适的；竖排开启时不起作用。 */
   autoDirection: boolean;
+  /** 图的背景色（CSS 颜色）；留空表示透明，跟随笔记背景。 */
+  background: string;
 }
 
-export const DEFAULT_RENDER_SETTINGS: RenderSettings = { theme: 'auto', density: 'compact', fontFamily: '', fontSize: 14, edges: 'orthogonal', hops: 'arc', vertical: false, autoDirection: false };
+export const DEFAULT_RENDER_SETTINGS: RenderSettings = { theme: 'auto', density: 'compact', fontFamily: '', fontSize: 14, edges: 'orthogonal', hops: 'arc', vertical: false, autoDirection: false, background: '' };
 
 /** 节点间距、层间距、节点内边距、整图留白。宽松即 Mermaid 默认值。 */
 export const DENSITY: Record<Density, { nodeSpacing: number; rankSpacing: number; padding: number; diagramPadding: number }> = {
@@ -80,6 +82,8 @@ export function renderMermaid(source: string, target: HTMLElement, settings: Ren
       if (!parsed) throw new Error('Mermaid 没有生成图。');
       const element = doc.importNode(parsed, true) as unknown as SVGSVGElement;
       element.dataset.mpEdges = orthogonal ? 'orthogonal' : 'curved';
+      const background = settings.background.trim();
+      if (background) { element.style.backgroundColor = background; element.style.borderRadius = '6px'; }
       if (source.includes('%% mermaid-plus-layout:')) await applyStoredLayout(source, element, target);
       target.replaceChildren(element);
       bindFunctions?.(element);

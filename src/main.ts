@@ -42,12 +42,24 @@ class StyleSettingTab extends PluginSettingTab {
         .onChange(v => save({ fontFamily: v })));
     new Setting(containerEl).setName('字号').setDesc('单位 px。')
       .addSlider(sl => sl.setLimits(10, 22, 1).setValue(s.fontSize).setDynamicTooltip().onChange(v => save({ fontSize: v })));
+    // 取色器拖动时会连续触发修改，这里只更新说明和按钮，不重画设置页，免得打断取色。
+    const describe = (value: string) => value ? `当前：${value}。阅读视图、实时预览和编辑页都用这个颜色。` : '当前透明，跟随笔记背景。选一个颜色后，图会画在这块底色上。';
+    let reset: HTMLElement | undefined;
+    const background = new Setting(containerEl).setName('背景色').setDesc(describe(s.background));
+    background.addColorPicker(c => c.setValue(s.background || '#ffffff').onChange(v => {
+      void save({ background: v }); background.setDesc(describe(v)); reset?.toggle(true);
+    }));
+    background.addExtraButton(b => {
+      b.setIcon('reset').setTooltip('恢复透明').onClick(() => saveAndRefresh({ background: '' }));
+      reset = b.extraSettingsEl; reset.toggle(!!s.background);
+    });
   }
 }
 
 export default class MermaidPlus extends Plugin {
   settings: RenderSettings = { ...DEFAULT_RENDER_SETTINGS };
   private blocks?: DiagramBlocks;
+  private editing?: InlineEditing;
   private repaintTimer = 0;
 
   async onload() {
@@ -55,7 +67,7 @@ export default class MermaidPlus extends Plugin {
     // 旧版本的“排版 / 连线拐弯”两项已合并为“连线”。
     delete saved.layout; delete saved.curve;
     this.settings = { ...DEFAULT_RENDER_SETTINGS, ...saved };
-    const editing = new InlineEditing(this, () => this.settings);
+    const editing = this.editing = new InlineEditing(this, () => this.settings);
     editing.register();
     this.blocks = new DiagramBlocks(this, () => this.settings, editing);
     this.blocks.register();
@@ -83,6 +95,6 @@ export default class MermaidPlus extends Plugin {
 
   private scheduleRepaint() {
     window.clearTimeout(this.repaintTimer);
-    this.repaintTimer = window.setTimeout(() => void this.blocks?.repaint(), 250);
+    this.repaintTimer = window.setTimeout(() => { this.editing?.refresh(); void this.blocks?.repaint(); }, 250);
   }
 }

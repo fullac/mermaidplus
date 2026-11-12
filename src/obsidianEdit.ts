@@ -115,6 +115,9 @@ export class InlineEditing {
     return false;
   }
 
+  /** 设置改变后，按新样式重画正在打开的编辑页（保留选中）。 */
+  refresh() { for (const editor of this.mounted.values()) editor.update(editor.source()); }
+
   /** 这个容器里正在显示编辑页。 */
   isEditing(host: HTMLElement) { return this.mounted.has(host); }
 
