@@ -6,6 +6,8 @@ let loading: Promise<Mermaid> | undefined;
 export function loadBundledMermaid() {
   return loading ??= import('mermaid').then(m => m.default);
 }
+/** ELK 参数调整和 Mermaid 一样，第一次画图时才加载。 */
+let tuningModule: Promise<typeof import('./elkTuning')> | undefined;
 
 export type Density = 'compact' | 'normal' | 'loose';
 export type ThemeChoice = 'auto' | 'default' | 'neutral' | 'forest' | 'dark' | 'base';
@@ -20,9 +22,13 @@ export interface RenderSettings {
   edges: 'orthogonal' | 'curved';
   /** 直角走线时，连线交叉处画成小半圆跳线（arc）、断开（gap）或直接交叉（none）。 */
   hops: 'arc' | 'gap' | 'none';
+  /** 竖排：不管源码写的方向，整张图一律自上而下。 */
+  vertical: boolean;
+  /** 自动选横竖：直角走线时两个方向各排一次，选放进笔记栏后更合适的；竖排开启时不起作用。 */
+  autoDirection: boolean;
 }
 
-export const DEFAULT_RENDER_SETTINGS: RenderSettings = { theme: 'auto', density: 'compact', fontFamily: '', fontSize: 14, edges: 'orthogonal', hops: 'arc' };
+export const DEFAULT_RENDER_SETTINGS: RenderSettings = { theme: 'auto', density: 'compact', fontFamily: '', fontSize: 14, edges: 'orthogonal', hops: 'arc', vertical: false, autoDirection: false };
 
 /** 节点间距、层间距、节点内边距、整图留白。宽松即 Mermaid 默认值。 */
 export const DENSITY: Record<Density, { nodeSpacing: number; rankSpacing: number; padding: number; diagramPadding: number }> = {
@@ -64,7 +70,9 @@ export function renderMermaid(source: string, target: HTMLElement, settings: Ren
     });
     const id = `mp-diagram-${Date.now().toString(36)}-${++serial}`;
     try {
-      const { svg, bindFunctions } = await mermaid.render(id, source);
+      const text = settings.vertical ? withVerticalHeader(source) : source;
+      const tuning = { density: settings.density, vertical: settings.vertical, autoDirection: settings.autoDirection, availableWidth: availableWidth(target) };
+      const { svg, bindFunctions } = await (await (tuningModule ??= import('./elkTuning'))).withElkTuning(tuning, () => mermaid.render(id, text));
       // strict 模式下 Mermaid 已清理用户标签中的 HTML；这里按 HTML 解析以兼容其中的 <br> 等写法，只取出 svg 元素。
       const parsed = new DOMParser().parseFromString(svg, 'text/html').querySelector('svg');
       if (!parsed) throw new Error('Mermaid 没有生成图。');
@@ -80,6 +88,26 @@ export function renderMermaid(source: string, target: HTMLElement, settings: Ren
   const result = queue.then(run, run);
   queue = result.catch(() => undefined);
   return result;
+}
+
+/** 图能占用的宽度：目标元素或其上层第一个有宽度的元素；都量不到时按常见笔记栏宽度估计。 */
+function availableWidth(target: HTMLElement) {
+  for (let el: HTMLElement | null = target; el; el = el.parentElement) if (el.clientWidth > 0) return el.clientWidth;
+  return 700;
+}
+
+/** 把 flowchart / graph 首行的方向改成 TD（没写方向就补上）。只改渲染用的副本，不改笔记。 */
+export function withVerticalHeader(source: string) {
+  const lines = source.split('\n');
+  let i = 0;
+  if (lines[0]?.trim() === '---') { i = 1; while (i < lines.length && lines[i]!.trim() !== '---') i++; i++; }
+  for (; i < lines.length; i++) {
+    const line = lines[i]!;
+    if (!line.trim() || line.trim().startsWith('%%')) continue;
+    lines[i] = line.replace(/^(\s*(?:flowchart|graph))(?:[ \t]+(?:TB|TD|BT|LR|RL))?(?=[\s;]|$)/, '$1 TD');
+    break;
+  }
+  return lines.join('\n');
 }
 
 /** 第一行（跳过注释和 front matter）是 flowchart / graph 时返回 true。 */
