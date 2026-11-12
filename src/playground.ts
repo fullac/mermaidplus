@@ -14,7 +14,7 @@ export function createPlayground(root: HTMLElement, initialSource: string, nativ
     const el = doc.createElement(tag); if (text) el.textContent = text; parent.append(el); return el;
   }
   element('h2', root, 'Mermaid Plus · 样式与自动布局');
-  element('p', root, '保留图的内容，自动整理节点与连线。样式来自注释，布局选项仅影响右侧预览。').className = 'mp-intro';
+  element('p', root, '图的内容不变，只重新摆放节点和连线。样式来自注释，下面的布局选项只影响右侧预览。').className = 'mp-intro';
   const layoutControls = element('div', root); layoutControls.className = 'mp-controls mp-layout-controls';
   function select(name: string, choices: [string, string][], initial: string) {
     const label = element('label', layoutControls, name), select = element('select', label);
@@ -79,7 +79,7 @@ export function createPlayground(root: HTMLElement, initialSource: string, nativ
       apply.disabled = !nodeSelect.value; clear.disabled = !nodeSelect.value;
     } catch (error) {
       if (disposed || current !== revision) return;
-      enhanced.textContent = '此语法暂不支持增强渲染，源码未改动。'; messages.push(String(error));
+      enhanced.textContent = '这种写法暂时不支持增强显示，源码没动。'; messages.push(String(error));
     } finally { enhancedStage.remove(); }
     // 渲染到可测量的临时容器；避免较慢的旧任务覆盖新预览。
     const staging = element('div', root); staging.className = 'mp-native-staging';
@@ -96,14 +96,14 @@ export function createPlayground(root: HTMLElement, initialSource: string, nativ
       }
       messages.push(String(error));
     } finally { staging.remove(); }
-    if (!disposed && current === revision) status.textContent = messages.length ? messages.join(' ') : '渲染完成 · 已自动整理节点与连线 · 未写入笔记';
+    if (!disposed && current === revision) status.textContent = messages.length ? messages.join(' ') : '渲染完成，节点和连线已重新摆放，没有写进笔记。';
   }
   function updateStyles(clearAll: boolean) {
     try {
       const node = parseFlowchart(source.value).nodes.find(n => n.id === nodeSelect.value);
       if (!node) return;
       const a = readAnnotations(source.value).annotations.find(a => a.node === node.id);
-      if (a && a.label !== node.raw && !clearAll) throw new Error('原始文字已变化，请先明确清除该节点旧样式，再添加新样式。');
+      if (a && a.label !== node.raw && !clearAll) throw new Error('节点文字已经变了，请先清除这个节点的旧样式，再加新样式。');
       const styles = a?.label === node.raw ? [...a.styles] : [];
       if (!clearAll) styles.push({ text: fragment.value, type: styleSelect.value as StyleType });
       source.value = setNodeStyles(source.value, node.id, node.raw, clearAll ? [] : styles);

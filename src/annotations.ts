@@ -41,7 +41,7 @@ export function resolveStyles(label: string, styles: StyleSpec[]) {
     let from = 0, at: number;
     while ((at = label.indexOf(style.text, from)) !== -1) { matches.push(at); from = at + style.text.length; }
     if (style.occurrence === undefined && matches.length > 1) {
-      warnings.push(`“${style.text}”重复出现，请指定 occurrence（从 0 开始的出现序号）。`); continue;
+      warnings.push(`“${style.text}”出现了不止一次，请用 occurrence 指定第几次（从 0 开始）。`); continue;
     }
     const start = matches[style.occurrence ?? 0];
     if (start === undefined) { warnings.push(`找不到“${style.text}”，样式已跳过。`); continue; }
@@ -65,11 +65,11 @@ export function setNodeStyles(source: string, node: string, label: string, style
   const matches = [...source.matchAll(/^\s*%% mermaid-plus:[^\r\n]*/gm)].filter(m => {
     try { return JSON.parse(m[0].replace(prefix, '$1')).node === node; } catch { return false; }
   });
-  if (matches.length > 1) throw new Error(`节点 ${node} 存在重复注释，请先修复。`);
+  if (matches.length > 1) throw new Error(`节点 ${node} 有重复的注释，请先改好。`);
   const match = matches[0];
   if (match) {
     const existing: unknown = JSON.parse(match[0].replace(prefix, '$1'));
-    if (!valid(existing)) throw new Error(`节点 ${node} 的原注释无效或版本不受支持，请先修复。`);
+    if (!valid(existing)) throw new Error(`节点 ${node} 的注释无效或版本不认识，请先改好。`);
     // \s 可包含空行；这里只替换注释本身，保留前导空白。
     const offset = match[0].indexOf('%%');
     const start = match.index! + offset;

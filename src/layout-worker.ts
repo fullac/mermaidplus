@@ -57,7 +57,7 @@ async function layoutWith(mode: 'thread' | 'inline', chart: Flowchart, sizes: Ma
           reject(new WorkerStartError('无法启动布局线程。', { cause: event.message || event }));
         }, { once: true });
       }
-      timer = setTimeout(() => reject(new Error('自动整理超过 8 秒，已停止计算；请尝试单一方向或拆分流程图。')), 8000);
+      timer = setTimeout(() => reject(new Error('自动整理超过 8 秒，已经停了。可以固定一个方向，或者把图拆小。')), 8000);
       layoutFlowchart(chart, sizes, labels, settings, available, graph => engine.layout(graph)).then(resolve, reject);
     });
   } finally {

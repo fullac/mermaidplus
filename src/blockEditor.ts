@@ -203,7 +203,7 @@ export function mountBlockEditor(container: HTMLElement, initialSource: string, 
       if (state.node && chart.nodes.some(n => n.id === state.node)) keep.node = state.node;
       if (state.edge !== undefined && chart.edges[state.edge]) keep.edge = state.edge;
       select(keep);
-      say(complete ? hint : '部分节点或连线无法点选（Mermaid 输出与源码未能完全对应），可直接改源码。');
+      say(complete ? hint : '有些节点或连线点不中，可以直接改源码。');
       if (focusText) startText();
     } catch (error) {
       if (disposed || current !== revision) return;
@@ -220,7 +220,7 @@ export function mountBlockEditor(container: HTMLElement, initialSource: string, 
     try {
       const ok = await host.commit(source, result.source);
       if (disposed) return;
-      if (!ok) { say('这个代码块已在别处被修改，未写入。请重新进入编辑。'); return; }
+      if (!ok) { say('这个代码块在别处被改过了，这次没有写入。请退出后重新编辑。'); return; }
       source = result.source;
       state = { node: result.select?.node, edge: result.select?.edge, editing: editText };
       host.remember?.(state);
@@ -344,7 +344,7 @@ export function mountBlockEditor(container: HTMLElement, initialSource: string, 
     wire.append(line);
     drag = { from: state.node, line, x, y };
     root.classList.add('mp-connecting');
-    say('拖到目标节点上松开即可连线；拖到空白处会新建节点。');
+    say('拖到另一个节点上松开就能连线，拖到空白处会新建节点。');
   });
   // 拖动节点调整位置：拖动中只移动画面，松手后把偏移写进源码的位置注释。
   stage.addEventListener('pointerdown', event => {

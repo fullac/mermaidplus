@@ -16,38 +16,37 @@ class StyleSettingTab extends PluginSettingTab {
     const saveAndRefresh = async (change: Partial<RenderSettings>) => { await save(change); this.display(); };
 
     new Setting(containerEl).setName('排版').setHeading();
-    new Setting(containerEl).setName('竖排').setDesc('开启后所有流程图一律自上而下排列，不管源码写的是 LR 还是 TD。只影响显示，不改笔记。')
+    new Setting(containerEl).setName('纵向排列')
       .addToggle(t => t.setValue(s.vertical).onChange(on => saveAndRefresh({ vertical: on })));
     if (!s.vertical && s.edges === 'orthogonal') {
-      new Setting(containerEl).setName('自动选择横竖').setDesc('横排、竖排各排一次，选缩放到笔记栏宽度后更矮且字不会太小的那个；两者差不多时按源码方向。图越大越耗时。')
+      new Setting(containerEl).setName('自动选择排列方向')
         .addToggle(t => t.setValue(s.autoDirection).onChange(on => save({ autoDirection: on })));
     }
-    new Setting(containerEl).setName('直角走线').setDesc('开启后连线只走水平和垂直线（ELK 排版）；关闭则用 Mermaid 默认的平滑曲线（dagre 排版）。')
+    new Setting(containerEl).setName('直角走线')
       .addToggle(t => t.setValue(s.edges === 'orthogonal').onChange(on => saveAndRefresh({ edges: on ? 'orthogonal' : 'curved' })));
     if (s.edges === 'orthogonal') {
-      new Setting(containerEl).setName('连线交叉处').setDesc('两条直角连线交叉时的画法。')
-        .addDropdown(d => d.addOptions({ arc: '跳线（半圆绕过）', gap: '断开', none: '直接交叉' })
+      new Setting(containerEl).setName('连线交叉方式')
+        .addDropdown(d => d.addOptions({ arc: '跳线', gap: '断开', none: '交叉' })
           .setValue(s.hops).onChange(v => save({ hops: v as RenderSettings['hops'] })));
     }
-    new Setting(containerEl).setName('紧凑程度').setDesc('节点间距、层间距和节点内边距，直角走线和平滑曲线都生效。宽松即 Mermaid 默认值。')
+    new Setting(containerEl).setName('紧凑程度')
       .addDropdown(d => d.addOptions({ compact: '紧凑', normal: '适中', loose: '宽松' })
         .setValue(s.density).onChange(v => save({ density: v as Density })));
 
     new Setting(containerEl).setName('外观').setHeading();
-    new Setting(containerEl).setName('配色主题').setDesc('“跟随明暗”在浅色模式用 Mermaid 默认主题，深色模式用暗色主题。')
+    new Setting(containerEl).setName('主题')
       .addDropdown(d => d.addOptions({ auto: '跟随明暗', default: '默认', neutral: '中性', forest: '森林', dark: '暗色', base: '基础' })
         .setValue(s.theme).onChange(v => save({ theme: v as ThemeChoice })));
-    new Setting(containerEl).setName('字体').setDesc('CSS 字体名，可写多个用逗号分隔；留空使用 Mermaid 默认字体。例如：var(--font-interface)')
+    new Setting(containerEl).setName('字体').setDesc('填字体名，多个用英文逗号隔开，前面的优先，比如 PingFang SC, Arial。不填就用默认字体。')
       .addText(t => t.setPlaceholder('"trebuchet ms", verdana, arial, sans-serif').setValue(s.fontFamily)
         .onChange(v => save({ fontFamily: v })));
-    new Setting(containerEl).setName('字号').setDesc('单位 px。')
+    new Setting(containerEl).setName('字号')
       .addSlider(sl => sl.setLimits(10, 22, 1).setValue(s.fontSize).setDynamicTooltip().onChange(v => save({ fontSize: v })));
-    // 取色器拖动时会连续触发修改，这里只更新说明和按钮，不重画设置页，免得打断取色。
-    const describe = (value: string) => value ? `当前：${value}。阅读视图、实时预览和编辑页都用这个颜色。` : '当前透明，跟随笔记背景。选一个颜色后，图会画在这块底色上。';
+    // 取色器拖动时会连续触发修改，这里只切换“恢复透明”按钮，不重画设置页，免得打断取色。
     let reset: HTMLElement | undefined;
-    const background = new Setting(containerEl).setName('背景色').setDesc(describe(s.background));
+    const background = new Setting(containerEl).setName('背景');
     background.addColorPicker(c => c.setValue(s.background || '#ffffff').onChange(v => {
-      void save({ background: v }); background.setDesc(describe(v)); reset?.toggle(true);
+      void save({ background: v }); reset?.toggle(true);
     }));
     background.addExtraButton(b => {
       b.setIcon('reset').setTooltip('恢复透明').onClick(() => saveAndRefresh({ background: '' }));

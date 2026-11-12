@@ -21,7 +21,7 @@ function problem(source: string): string | null {
 }
 
 function explain(reason: string) {
-  new Notice(`这张图暂时不能可视化编辑，请直接改源码。\n原因：${reason}`, 10000);
+  new Notice(`这张图暂时没法在图上编辑，请直接改源码。\n原因：${reason}`, 10000);
 }
 
 export class InlineEditing {
@@ -67,7 +67,7 @@ export class InlineEditing {
   /** 命令入口：编辑光标所在的 Mermaid 图。把光标移出代码块，实时预览才会显示图本身。 */
   editAtCursor(view: EditorView, path: string, cursorLine: number) {
     const block = findMermaidBlocks(view.state.doc.toString()).find(b => b.start <= cursorLine && cursorLine <= b.end);
-    if (!block) { new Notice('请将光标放在 Mermaid 代码块内。'); return; }
+    if (!block) { new Notice('先把光标放到 Mermaid 代码块里。'); return; }
     const reason = problem(block.source);
     if (reason) { explain(reason); return; }
     this.session = { path, line: block.start, state: {}, undo: [], redo: [] };
@@ -173,7 +173,7 @@ export class InlineEditing {
         bar.append(b);
       };
       button('源码', '显示这张图的 Mermaid 源码', showSource);
-      button('编辑', '可视化编辑这张流程图', () => {
+      button('编辑', '在图上编辑这张流程图', () => {
         this.session = { ...ref, state: {}, undo: [], redo: [] };
         void this.open(host, ref, makeHost());
       });
@@ -192,7 +192,7 @@ export class InlineEditing {
   /** 实时预览：把光标放到代码块第一行，Obsidian 随即显示源码。 */
   private revealSource(view: EditorView, ref: BlockRef) {
     const block = findMermaidBlocks(view.state.doc.toString()).find(b => b.start === ref.line);
-    if (!block) { new Notice('找不到这张图的源码，可能已被移动或修改。'); return; }
+    if (!block) { new Notice('找不到这张图的源码，可能被移走或改过了。'); return; }
     const line = view.state.doc.line(Math.min(block.start + 2, block.end + 1));
     view.dispatch({ selection: { anchor: line.from }, scrollIntoView: true });
     view.focus();
@@ -203,7 +203,7 @@ export class InlineEditing {
     const shown = host.querySelector(':scope > .mp-source-view');
     if (shown) { shown.remove(); button.textContent = '源码'; return; }
     void this.readingHost(ref).read().then(source => {
-      if (source === null) { new Notice('找不到这张图的源码，可能已被移动或修改。'); return; }
+      if (source === null) { new Notice('找不到这张图的源码，可能被移走或改过了。'); return; }
       if (host.querySelector(':scope > .mp-source-view')) return;
       const pre = host.ownerDocument.createElement('pre');
       pre.className = 'mp-source-view';
@@ -216,7 +216,7 @@ export class InlineEditing {
   private async open(host: HTMLElement, ref: BlockRef, editHost: EditHost & { read(): Promise<string | null> }) {
     if (this.mounted.has(host)) return;
     const source = await editHost.read();
-    if (source === null) { new Notice('找不到这张图的源码，可能已被移动或修改。'); this.session = undefined; return; }
+    if (source === null) { new Notice('找不到这张图的源码，可能被移走或改过了。'); this.session = undefined; return; }
     const reason = problem(source);
     if (reason) { explain(reason); this.session = undefined; return; }
     if (this.mounted.has(host) || !host.isConnected) return;
@@ -269,13 +269,13 @@ export class InlineEditing {
       undo: async () => {
         const s = this.current(ref), step = s?.undo.at(-1);
         if (!s || !step) return null;
-        if (!await replace(step[1], step[0])) { new Notice('代码块已在别处修改，无法撤销。'); return null; }
+        if (!await replace(step[1], step[0])) { new Notice('代码块在别处被改过，没法撤销。'); return null; }
         s.undo.pop(); s.redo.push(step); return step[0];
       },
       redo: async () => {
         const s = this.current(ref), step = s?.redo.at(-1);
         if (!s || !step) return null;
-        if (!await replace(step[0], step[1])) { new Notice('代码块已在别处修改，无法重做。'); return null; }
+        if (!await replace(step[0], step[1])) { new Notice('代码块在别处被改过，没法重做。'); return null; }
         s.redo.pop(); s.undo.push(step); return step[1];
       },
       remember: (state: EditorState) => { const s = this.current(ref); if (s) s.state = state; },

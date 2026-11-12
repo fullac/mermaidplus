@@ -188,7 +188,7 @@ test('源码在别处被改过时拒绝写入并提示', async ({ page }) => {
   const changed = await sourceText(page);
   await editor(page).locator('[data-node-id="MA"]').click();
   await page.keyboard.press('Delete');
-  await expect(status(page)).toContainText('已在别处被修改');
+  await expect(status(page)).toContainText('在别处被改过了');
   expect(await sourceText(page)).toBe(changed);
 });
 

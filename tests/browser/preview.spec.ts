@@ -56,7 +56,7 @@ test('未知语法明确停止增强；恢复示例可以继续使用', async ({
   const unknown = 'flowchart TD\nA & B --> C';
   await textarea.fill(unknown);
   await page.getByRole('button', { name: '刷新预览' }).click();
-  await expect(page.locator('.mp-enhanced')).toContainText('暂不支持增强渲染');
+  await expect(page.locator('.mp-enhanced')).toContainText('暂时不支持增强显示');
   expect(await textarea.inputValue()).toBe(unknown);
   await expect(page.getByRole('button', { name: '添加样式' })).toBeDisabled();
   await page.getByRole('button', { name: '恢复初始示例' }).click();
@@ -79,6 +79,6 @@ test('预览容器缩放时仍按未缩放尺寸布局，未知版本注释不�
   await expect(page.getByRole('status')).toContainText('样式注释无效');
   await page.getByLabel('文字片段').fill('getUser()');
   await page.getByRole('button', { name: '添加样式' }).click();
-  await expect(page.getByRole('status')).toContainText('版本不受支持');
+  await expect(page.getByRole('status')).toContainText('版本不认识');
   expect(await textarea.inputValue()).toBe(future);
 });

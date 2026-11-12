@@ -1,9 +1,9 @@
 {
   "id": "mermaid-plus",
   "name": "Mermaid Plus",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "minAppVersion": "1.5.0",
-  "description": "Experimental preview of Mermaid text styles stored in comments. Does not modify notes.",
+  "description": "Render Mermaid flowcharts with a bundled Mermaid and edit them directly on the diagram.",
   "author": "Mermaid Plus contributors",
   "isDesktopOnly": true
 }
