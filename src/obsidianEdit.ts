@@ -29,6 +29,8 @@ export class InlineEditing {
   private mounted = new Map<HTMLElement, BlockEditor>();
   /** 实时预览里找到流程图块时调用，用来换成插件自己的渲染。 */
   onLiveEmbed?: (embed: HTMLElement, source: string) => void;
+  /** 退出编辑后调用：编辑期间不画只读图，这时按最新源码补画。 */
+  onExit?: (host: HTMLElement, source: string) => void;
 
   constructor(private plugin: Plugin, private settings: () => RenderSettings) {}
 
@@ -37,14 +39,27 @@ export class InlineEditing {
     this.plugin.registerEditorExtension(ViewPlugin.fromClass(class {
       private observer: MutationObserver;
       private timer = 0;
+      private pending = false;
       constructor(private view: EditorView) {
-        this.observer = new MutationObserver(() => this.schedule());
+        this.observer = new MutationObserver(records => {
+          // 插件自己的编辑页和图在变时不用处理。
+          const relevant = records.filter(r => !(r.target as Element).closest?.('.mp-block-editor, .mp-diagram-svg'));
+          if (!relevant.length) return;
+          // 代码块被 Obsidian 重建时立即处理（赶在浏览器画下一帧之前），否则原图会闪一下、编辑页会消失再出现。
+          const embedChanged = relevant.some(r => [...r.addedNodes].some(n => n instanceof HTMLElement && (n.matches('.cm-embed-block') || !!n.querySelector('.cm-embed-block') || !!n.closest('.cm-embed-block'))));
+          if (embedChanged) this.now(); else this.schedule();
+        });
         this.observer.observe(view.contentDOM, { childList: true, subtree: true });
         this.schedule();
       }
       update(update: ViewUpdate) { if (update.docChanged || update.viewportChanged) this.schedule(); }
       destroy() { this.observer.disconnect(); window.clearTimeout(this.timer); }
       private schedule() { window.clearTimeout(this.timer); this.timer = window.setTimeout(() => self.live(this.view), 60); }
+      private now() {
+        if (this.pending) return;
+        this.pending = true;
+        queueMicrotask(() => { this.pending = false; window.clearTimeout(this.timer); self.live(this.view); });
+      }
     }));
     this.plugin.register(() => { for (const editor of this.mounted.values()) editor.dispose(); this.mounted.clear(); });
   }
@@ -64,9 +79,44 @@ export class InlineEditing {
 
   private schedule(view: EditorView) { window.setTimeout(() => this.live(view), 60); }
 
+  /** 清掉已离开页面的编辑页；正在编辑的那个留着，等 Obsidian 重建好代码块后搬过去。 */
   private sweep() {
-    for (const [host, editor] of this.mounted) if (!host.isConnected) { editor.dispose(); this.mounted.delete(host); }
+    for (const [host, editor] of this.mounted) if (!host.isConnected && !this.session) { editor.dispose(); this.mounted.delete(host); }
   }
+
+  /** 结束一个编辑页，并让只读图按最新源码补画。 */
+  private release(host: HTMLElement, editor: BlockEditor) {
+    const source = editor.source();
+    editor.dispose(); this.mounted.delete(host); host.classList.remove('mp-editing');
+    if (host.isConnected) this.onExit?.(host, source);
+  }
+
+  /**
+   * 代码块被 Obsidian 重建（写回、重新渲染）后，把正在编辑的编辑页原样搬进新容器，不重新渲染。
+   * 按代码块位置或源码内容认领；只从已离开页面的、或同一窗格里的旧容器搬，避免在两个窗格之间抢。
+   */
+  claim(host: HTMLElement, path: string, line?: number, source?: string): boolean {
+    const s = this.session;
+    if (!s || s.path !== path) return false;
+    const pane = (el: Element) => el.closest('.workspace-leaf-content');
+    const same = (a: string, b: string) => a.replace(/\s+$/, '') === b.replace(/\s+$/, '');
+    for (const [old, editor] of this.mounted) {
+      if (old === host) return true;
+      if (old.isConnected && pane(old) !== pane(host)) continue;
+      if (line !== s.line && !(source !== undefined && same(source, editor.source()))) continue;
+      this.mounted.delete(old); old.classList.remove('mp-editing');
+      host.classList.add('mp-edit-host', 'mp-editing');
+      editor.adopt(host);
+      this.mounted.set(host, editor);
+      if (line !== undefined) s.line = line;
+      if (source !== undefined && !same(source, editor.source())) editor.update(source);
+      return true;
+    }
+    return false;
+  }
+
+  /** 这个容器里正在显示编辑页。 */
+  isEditing(host: HTMLElement) { return this.mounted.has(host); }
 
   /** 阅读视图：图画好后调用。通过 getSectionInfo 找到代码块，写回用 vault.process。实时预览里的图交给 live() 处理。 */
   attach(el: HTMLElement, ctx: MarkdownPostProcessorContext) {
@@ -97,6 +147,7 @@ export class InlineEditing {
       const block = blocks.find(b => line >= b.start && line <= b.end) ?? blocks.find(b => Math.abs(b.start - line) <= 1);
       if (!block || !isFlowchart(block.source)) continue;
       const ref: BlockRef = { path: file.path, line: block.start };
+      this.claim(embed, file.path, block.start, block.source);
       this.onLiveEmbed?.(embed, block.source);
       this.decorate(embed, ref, () => this.liveHost(view, ref), () => this.revealSource(view, ref));
     }
@@ -104,12 +155,6 @@ export class InlineEditing {
 
   /** 给图加“源码 / 编辑”工具条；如果它正是当前会话的代码块，直接恢复编辑。 */
   private decorate(host: HTMLElement, ref: BlockRef, makeHost: () => EditHost & { read(): Promise<string | null> }, showSource: (button: HTMLButtonElement) => void) {
-    const existing = this.mounted.get(host);
-    if (existing) {
-      // 宿主容器被复用、但内容被 Obsidian 重新渲染时，编辑器会被挤掉，需要重新挂载。
-      if (host.querySelector(':scope > .mp-block-editor')) return;
-      existing.dispose(); this.mounted.delete(host);
-    }
     host.classList.add('mp-edit-host');
     if (!host.querySelector(':scope > .mp-entry-bar')) {
       const doc = host.ownerDocument;
@@ -130,6 +175,12 @@ export class InlineEditing {
         void this.open(host, ref, makeHost());
       });
       host.append(bar);
+    }
+    const existing = this.mounted.get(host);
+    if (existing) {
+      // 宿主容器被复用、但内容被 Obsidian 重新渲染时，编辑页会被挤掉，原样放回即可。
+      if (!host.querySelector(':scope > .mp-block-editor')) existing.adopt(host);
+      return;
     }
     const s = this.session;
     if (s && s.path === ref.path && s.line === ref.line) void this.open(host, ref, makeHost());
@@ -166,7 +217,7 @@ export class InlineEditing {
     const reason = problem(source);
     if (reason) { explain(reason); this.session = undefined; return; }
     if (this.mounted.has(host) || !host.isConnected) return;
-    for (const [other, editor] of this.mounted) if (other !== host) { editor.dispose(); other.classList.remove('mp-editing'); this.mounted.delete(other); }
+    for (const [other, editor] of this.mounted) if (other !== host) this.release(other, editor);
     host.classList.add('mp-editing');
     const state = this.session && this.session.path === ref.path && this.session.line === ref.line ? this.session.state : {};
     this.mounted.set(host, mountBlockEditor(host, source, editHost, state));
@@ -174,7 +225,7 @@ export class InlineEditing {
 
   private close(ref: BlockRef) {
     if (this.session && this.session.path === ref.path && this.session.line === ref.line) this.session = undefined;
-    for (const [host, editor] of this.mounted) { editor.dispose(); host.classList.remove('mp-editing'); this.mounted.delete(host); }
+    for (const [host, editor] of this.mounted) this.release(host, editor);
   }
 
   /** 编辑页与阅读视图用同一个渲染器和同一套样式。 */

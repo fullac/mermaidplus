@@ -20,7 +20,14 @@ export interface EditHost {
   exit(): void;
 }
 
-export interface BlockEditor { update(source: string, state?: EditorState): void; dispose(): void }
+export interface BlockEditor {
+  update(source: string, state?: EditorState): void;
+  /** 编辑器当前对应的源码（已写回的最新版本）。 */
+  source(): string;
+  /** 宿主容器被重建时，把编辑器原样搬进新容器：不重画、保留选中和键盘焦点。 */
+  adopt(container: HTMLElement): void;
+  dispose(): void;
+}
 
 const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform);
 const SVG = 'http://www.w3.org/2000/svg';
@@ -78,6 +85,10 @@ export function mountBlockEditor(container: HTMLElement, initialSource: string, 
   root.setAttribute('role', 'group');
   root.setAttribute('aria-label', 'Mermaid 可视化编辑');
   root.contentEditable = 'false';
+  /** 编辑器是否持有键盘焦点；容器被删掉时浏览器会丢掉焦点，搬家后据此还原。 */
+  let focused = false;
+  root.addEventListener('focusin', () => { focused = true; });
+  root.addEventListener('focusout', event => { if (root.isConnected && !root.contains(event.relatedTarget as Node | null)) focused = false; });
   const button = (parent: HTMLElement, text: string, title: string, action: () => void) => {
     const el = doc.createElement('button'); el.type = 'button'; el.textContent = text; el.title = title;
     el.setAttribute('aria-label', text);
@@ -455,6 +466,14 @@ export function mountBlockEditor(container: HTMLElement, initialSource: string, 
   void render(initialState.editing).then(() => { if (!initialState.editing && !disposed) root.focus({ preventScroll: true }); });
   return {
     update(next, nextState) { source = next; if (nextState) state = { ...nextState }; void render(nextState?.editing); },
+    source: () => source,
+    adopt(next) {
+      if (root.parentElement === next) return;
+      const refocus = focused && !textBox;
+      next.append(root);
+      if (refocus) root.focus({ preventScroll: true });
+      place();
+    },
     dispose() {
       disposed = true; revision++; textBox = undefined;
       doc.removeEventListener('pointermove', move, true); doc.removeEventListener('pointerup', drop, true);

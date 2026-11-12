@@ -40,6 +40,10 @@ export class DiagramBlocks {
     // 无论上面是否成功都注册：若代码块处理器生效，页面上不会出现 Obsidian 原图，兜底逻辑什么都不做。
     this.plugin.registerMarkdownPostProcessor((el, ctx) => this.claimSection(el, ctx), -1000);
     this.editing.onLiveEmbed = (embed, source) => this.claimLive(embed, source);
+    this.editing.onExit = (host, source) => {
+      const entry = [...this.drawn].find(e => e.el === host);
+      if (entry) { entry.source = source; void this.paint(entry); } else this.claimLive(host, source);
+    };
     this.plugin.register(() => this.drawn.clear());
   }
 
@@ -47,6 +51,8 @@ export class DiagramBlocks {
     el.classList.add('mp-diagram');
     const entry: Drawn = { el, source };
     this.drawn.add(entry);
+    // 正在编辑的代码块被重建：直接把编辑页搬进来，不画只读图（退出编辑时再画）。
+    if (this.editing.claim(el, ctx.sourcePath, undefined, source)) { this.editing.attach(el, ctx); return; }
     await this.paint(entry);
     if (isFlowchartSource(source)) this.editing.attach(el, ctx);
   }
@@ -92,6 +98,8 @@ export class DiagramBlocks {
     for (const child of Array.from(embed.children) as HTMLElement[]) {
       if (!OURS.some(name => child.classList.contains(name))) child.classList.add('mp-native-hidden');
     }
+    // 编辑期间图被编辑页遮住，不必重画；退出编辑时由 onExit 补画。
+    if (this.editing.isEditing(embed)) return;
     let entry = this.live.get(embed);
     if (entry && entry.source === source && embed.querySelector(':scope > .mp-diagram-svg')) return;
     if (!entry) { entry = { el: embed, source }; this.live.set(embed, entry); this.drawn.add(entry); }
