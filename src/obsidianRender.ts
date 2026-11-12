@@ -23,7 +23,7 @@ async function renderWithObsidian(source: string, target: HTMLElement) {
 }
 
 /** 插件自己加的元素，不当作 Obsidian 原图隐藏。 */
-const OURS = ['mp-diagram-svg', 'mp-edit-entry', 'mp-block-editor', 'edit-block-button'];
+const OURS = ['mp-diagram-svg', 'mp-entry-bar', 'mp-source-view', 'mp-block-editor', 'edit-block-button'];
 
 export class DiagramBlocks {
   private drawn = new Set<Drawn>();

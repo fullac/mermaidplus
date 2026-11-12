@@ -80,7 +80,7 @@ export class InlineEditing {
       const child = new MarkdownRenderChild(el);
       ctx.addChild(child);
       child.register(() => { this.mounted.get(el)?.dispose(); this.mounted.delete(el); });
-      this.decorate(el, ref, () => this.readingHost(ref));
+      this.decorate(el, ref, () => this.readingHost(ref), button => this.toggleSource(el, ref, button));
     }, 0);
   }
 
@@ -98,12 +98,12 @@ export class InlineEditing {
       if (!block || !isFlowchart(block.source)) continue;
       const ref: BlockRef = { path: file.path, line: block.start };
       this.onLiveEmbed?.(embed, block.source);
-      this.decorate(embed, ref, () => this.liveHost(view, ref));
+      this.decorate(embed, ref, () => this.liveHost(view, ref), () => this.revealSource(view, ref));
     }
   }
 
-  /** 给图加“编辑”按钮；如果它正是当前会话的代码块，直接恢复编辑。 */
-  private decorate(host: HTMLElement, ref: BlockRef, makeHost: () => EditHost & { read(): Promise<string | null> }) {
+  /** 给图加“源码 / 编辑”工具条；如果它正是当前会话的代码块，直接恢复编辑。 */
+  private decorate(host: HTMLElement, ref: BlockRef, makeHost: () => EditHost & { read(): Promise<string | null> }, showSource: (button: HTMLButtonElement) => void) {
     const existing = this.mounted.get(host);
     if (existing) {
       // 宿主容器被复用、但内容被 Obsidian 重新渲染时，编辑器会被挤掉，需要重新挂载。
@@ -111,22 +111,52 @@ export class InlineEditing {
       existing.dispose(); this.mounted.delete(host);
     }
     host.classList.add('mp-edit-host');
-    let entry = host.querySelector<HTMLButtonElement>(':scope > .mp-edit-entry');
-    if (!entry) {
-      entry = host.ownerDocument.createElement('button');
-      entry.type = 'button'; entry.className = 'mp-edit-entry'; entry.textContent = '编辑';
-      entry.setAttribute('aria-label', '可视化编辑这张流程图');
+    if (!host.querySelector(':scope > .mp-entry-bar')) {
+      const doc = host.ownerDocument;
+      const bar = doc.createElement('div');
+      bar.className = 'mp-entry-bar';
+      bar.setAttribute('role', 'toolbar'); bar.setAttribute('aria-label', '流程图操作');
       // 阻止点击传到实时预览，否则光标会跳进代码块、图被源码替换。
-      entry.addEventListener('mousedown', event => { event.preventDefault(); event.stopPropagation(); });
-      entry.addEventListener('click', event => {
-        event.preventDefault(); event.stopPropagation();
+      bar.addEventListener('mousedown', event => { event.preventDefault(); event.stopPropagation(); });
+      const button = (label: string, title: string, action: (b: HTMLButtonElement) => void) => {
+        const b = doc.createElement('button');
+        b.type = 'button'; b.className = 'mp-entry-button'; b.textContent = label; b.setAttribute('aria-label', title);
+        b.addEventListener('click', event => { event.preventDefault(); event.stopPropagation(); action(b); });
+        bar.append(b);
+      };
+      button('源码', '显示这张图的 Mermaid 源码', showSource);
+      button('编辑', '可视化编辑这张流程图', () => {
         this.session = { ...ref, state: {}, undo: [], redo: [] };
         void this.open(host, ref, makeHost());
       });
-      host.append(entry);
+      host.append(bar);
     }
     const s = this.session;
     if (s && s.path === ref.path && s.line === ref.line) void this.open(host, ref, makeHost());
+  }
+
+  /** 实时预览：把光标放到代码块第一行，Obsidian 随即显示源码。 */
+  private revealSource(view: EditorView, ref: BlockRef) {
+    const block = findMermaidBlocks(view.state.doc.toString()).find(b => b.start === ref.line);
+    if (!block) { new Notice('找不到这张图的源码，可能已被移动或修改。'); return; }
+    const line = view.state.doc.line(Math.min(block.start + 2, block.end + 1));
+    view.dispatch({ selection: { anchor: line.from }, scrollIntoView: true });
+    view.focus();
+  }
+
+  /** 阅读视图：在图下方展开 / 收起只读源码。 */
+  private toggleSource(host: HTMLElement, ref: BlockRef, button: HTMLButtonElement) {
+    const shown = host.querySelector(':scope > .mp-source-view');
+    if (shown) { shown.remove(); button.textContent = '源码'; return; }
+    void this.readingHost(ref).read().then(source => {
+      if (source === null) { new Notice('找不到这张图的源码，可能已被移动或修改。'); return; }
+      if (host.querySelector(':scope > .mp-source-view')) return;
+      const pre = host.ownerDocument.createElement('pre');
+      pre.className = 'mp-source-view';
+      const code = host.ownerDocument.createElement('code');
+      code.textContent = source; pre.append(code); host.append(pre);
+      button.textContent = '收起源码';
+    });
   }
 
   private async open(host: HTMLElement, ref: BlockRef, editHost: EditHost & { read(): Promise<string | null> }) {
