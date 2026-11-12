@@ -27,9 +27,10 @@ export function displayText(raw: string): string {
     .replace(/#(\w+);/g, (all, name: string) => /^\d+$/.test(name) ? String.fromCodePoint(Number(name)) : entities[name.toLowerCase()] ?? all);
 }
 
-/** 编辑框中显示的文字：只把 <br/> 换成换行，其余原样保留，避免改字时丢掉原有格式。 */
+/** 编辑框中显示的文字：只把 <br/> 换成换行，Markdown 标签去掉外层反引号，其余原样保留，避免改字时丢掉原有格式。 */
 export function editText(raw: string): string {
-  return raw.replace(lineBreak, '\n');
+  const markdown = raw.match(/^`([\s\S]*)`$/);
+  return (markdown ? markdown[1]! : raw).replace(lineBreak, '\n');
 }
 
 // 节点形状：按开头符号从长到短尝试。

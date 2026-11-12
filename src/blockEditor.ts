@@ -2,6 +2,7 @@
 // 本模块在其上叠加类似 Obsidian 白板（Canvas）的交互：点选、悬浮工具条、四边连接点拖拽连线、双击改字或新建节点。
 import { addEdge, addNode, deleteEdge, deleteNode, setEdgeLabel, setNodeLabel, type EditResult } from './edit';
 import { editText, parseFlowchart, type Flowchart } from './flowchart';
+import { toggleMark, type Mark } from './markdownLabel';
 import { clearLayout, createMover, readLayout, setNodeOffset, type Mover } from './manualLayout';
 
 export interface EditorState { node?: string; edge?: number; editing?: boolean }
@@ -107,8 +108,14 @@ export function mountBlockEditor(container: HTMLElement, initialSource: string, 
   const nextButton = button(menu, '接一个节点', '新增一个节点并从这里连过去', () => { if (state.node) { const from = state.node; void apply(s => addNode(s, '新节点', from), true); } });
   const resetButton = button(menu, '复位', '回到自动排版的位置', () => { if (state.node) { const id = state.node; void apply(s => ({ source: clearLayout(s, id), select: { node: id } })); } });
   const deleteButton = button(menu, '删除', '删除（Delete）', () => removeSelection());
+  // 改字时选中一段文字，上方出现格式栏；写成 Mermaid 原生 Markdown 标签（**粗体**、*斜体*）。
+  const formatBar = doc.createElement('div'); formatBar.className = 'mp-format-bar'; formatBar.setAttribute('role', 'toolbar'); formatBar.setAttribute('aria-label', '文字格式');
+  const boldButton = button(formatBar, '加粗', `加粗（${isMac ? '⌘B' : 'Ctrl+B'}）`, () => format('bold'));
+  const italicButton = button(formatBar, '斜体', `斜体（${isMac ? '⌘I' : 'Ctrl+I'}）`, () => format('italic'));
+  boldButton.classList.add('mp-format-bold'); italicButton.classList.add('mp-format-italic');
+  formatBar.hidden = true;
   const wire = doc.createElementNS(SVG, 'svg'); wire.setAttribute('class', 'mp-wire');
-  overlay.append(frame, menu, wire);
+  overlay.append(frame, menu, formatBar, wire);
   canvas.append(overlay);
   stage.append(canvas);
   root.append(toolbar, stage);
@@ -247,19 +254,46 @@ export function mountBlockEditor(container: HTMLElement, initialSource: string, 
     input.style.width = `${width}px`; input.style.height = `${height}px`;
     input.addEventListener('keydown', event => {
       event.stopPropagation();
+      const mod = isMac ? event.metaKey : event.ctrlKey;
+      if (mod && !event.shiftKey && !event.altKey && (event.key.toLowerCase() === 'b' || event.key.toLowerCase() === 'i')) {
+        event.preventDefault(); format(event.key.toLowerCase() === 'b' ? 'bold' : 'italic'); return;
+      }
       if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); closeText(true); }
       else if (event.key === 'Escape') { event.preventDefault(); closeText(false); root.focus({ preventScroll: true }); }
     });
     input.addEventListener('blur', () => { if (textBox === input) closeText(true); });
+    for (const type of ['select', 'keyup', 'mouseup', 'input'] as const) input.addEventListener(type, () => placeFormatBar());
     menu.hidden = true;
     overlay.append(input); textBox = input;
     input.focus({ preventScroll: true }); input.select();
   }
 
+  /** 有选中文字时把格式栏放在编辑框上方（放不下时放下方）。 */
+  function placeFormatBar() {
+    const input = textBox;
+    if (!input || input.selectionStart === input.selectionEnd) { formatBar.hidden = true; return; }
+    formatBar.hidden = false;
+    const left = parseFloat(input.style.left) || 0, top = parseFloat(input.style.top) || 0;
+    const height = formatBar.offsetHeight || 28;
+    formatBar.style.left = `${Math.max(0, left)}px`;
+    formatBar.style.top = `${top - height - 12 >= 0 ? top - height - 12 : top + input.offsetHeight + 12}px`;
+  }
+
+  function format(mark: Mark) {
+    const input = textBox;
+    if (!input) return;
+    const next = toggleMark(input.value, input.selectionStart, input.selectionEnd, mark);
+    if (next.value === input.value) return;
+    input.value = next.value;
+    input.focus({ preventScroll: true });
+    input.setSelectionRange(next.start, next.end);
+    placeFormatBar();
+  }
+
   function closeText(save: boolean) {
     const input = textBox;
     if (!input) return;
-    textBox = undefined; input.remove();
+    textBox = undefined; input.remove(); formatBar.hidden = true;
     if (!save) { place(); return; }
     const text = input.value;
     if (state.node !== undefined) {

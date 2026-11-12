@@ -239,3 +239,30 @@ test('单击节点不会写入位置', async ({ page }) => {
   await expect(editor(page).locator('[data-node-id="OG"]')).toHaveClass(/mp-selected/);
   expect(await sourceText(page)).toBe(before);
 });
+
+test('改字时选中文字出现格式栏：加粗写成 Mermaid 原生 Markdown 标签', async ({ page }) => {
+  await editor(page).locator('[data-node-id="OG"]').dblclick();
+  const box = page.getByRole('textbox', { name: '节点文字' });
+  const bar = editor(page).getByRole('toolbar', { name: '文字格式' });
+  // 打开时全选，格式栏随之出现；取消选区后隐藏。
+  await expect(bar).toBeVisible();
+  await box.press('ArrowRight');
+  await expect(bar).toBeHidden();
+  // 选中 “Gateway”
+  await box.evaluate((el: HTMLTextAreaElement) => { const at = el.value.indexOf('Gateway'); el.setSelectionRange(at, at + 7); el.dispatchEvent(new Event('select')); });
+  await expect(bar).toBeVisible();
+  await bar.getByRole('button', { name: '加粗' }).click();
+  await expect(box).toBeFocused();
+  await expect(box).toHaveValue('Orchestrator **Gateway**\nFA 请求入口与路由');
+  // 快捷键给另一段加斜体
+  await box.evaluate((el: HTMLTextAreaElement) => { const at = el.value.indexOf('路由'); el.setSelectionRange(at, at + 2); });
+  await box.press(process.platform === 'darwin' ? 'Meta+i' : 'Control+i');
+  await box.press('Enter');
+  await expect.poll(() => sourceText(page)).toContain('OG["`Orchestrator **Gateway**<br/>FA 请求入口与*路由*`"]');
+  const label = editor(page).locator('[data-node-id="OG"]');
+  await expect(label.locator('strong')).toHaveText('Gateway');
+  await expect(label.locator('em')).toHaveText('路由');
+  // 再次编辑时编辑框里没有反引号。
+  await label.dblclick();
+  await expect(page.getByRole('textbox', { name: '节点文字' })).toHaveValue('Orchestrator **Gateway**\nFA 请求入口与*路由*');
+});

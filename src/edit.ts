@@ -2,6 +2,7 @@
 import { readAnnotations, setNodeStyles } from './annotations';
 import { parseFlowchart, type Flowchart, type Statement } from './flowchart';
 import { clearLayout } from './manualLayout';
+import { hasMarkdownMarks, isMarkdownRaw } from './markdownLabel';
 
 export type EditResult = { source: string; select?: { node?: string; edge?: number } };
 
@@ -9,13 +10,20 @@ function split(source: string) {
   return { lines: source.split(/\r?\n/), eol: source.includes('\r\n') ? '\r\n' : '\n' };
 }
 
-/** 编辑框里的文字转成源码标签：换行写成 <br/>，拒绝会破坏语法的字符。 */
-export function toRawLabel(text: string, kind: 'node' | 'edge'): string {
+/**
+ * 编辑框里的文字转成源码标签：换行写成 <br/>，拒绝会破坏语法的字符。
+ * 有 **粗体** / *斜体* 标记或原来就是 Markdown 标签时，写成 Mermaid 原生 Markdown 标签：
+ * 节点为 `文字`（放在双引号内），连线为 "`文字`"。
+ */
+export function toRawLabel(text: string, kind: 'node' | 'edge', wasMarkdown = false): string {
   const value = text.replace(/\r\n?/g, '\n').split('\n').map(line => line.trim()).join('\n').trim();
   if (!value) throw new Error('文字不能为空。');
   const banned = kind === 'node' ? /"/ : /["|]/;
   if (banned.test(value)) throw new Error(kind === 'node' ? '文字不能包含英文双引号 "，可以改用中文引号。' : '连线文字不能包含英文双引号 " 或竖线 |。');
-  return value.replace(/\n/g, '<br/>');
+  const raw = value.replace(/\n/g, '<br/>');
+  if (!wasMarkdown && !hasMarkdownMarks(value)) return raw;
+  if (raw.includes('`')) throw new Error('带粗体或斜体的文字不能包含反引号 `。');
+  return kind === 'node' ? `\`${raw}\`` : `"\`${raw}\`"`;
 }
 
 /** 修改节点文字：有显式标签就只替换标签内文字，没有就在首次出现处补上 ["文字"]。 */
@@ -23,7 +31,7 @@ export function setNodeLabel(source: string, id: string, text: string): EditResu
   const chart = parseFlowchart(source);
   const node = chart.nodes.find(n => n.id === id);
   if (!node) throw new Error(`找不到节点 ${id}。`);
-  const raw = toRawLabel(text, 'node');
+  const raw = toRawLabel(text, 'node', isMarkdownRaw(node.raw));
   const { lines, eol } = split(source);
   if (node.def) {
     const token = node.def, label = token.label!;
@@ -64,7 +72,7 @@ export function setEdgeLabel(source: string, index: number, text: string): EditR
   const chart = parseFlowchart(source);
   const edge = chart.edges[index];
   if (!edge) throw new Error('找不到这条连线。');
-  const raw = text.trim() ? toRawLabel(text, 'edge') : '';
+  const raw = text.trim() ? toRawLabel(text, 'edge', isMarkdownRaw(edge.raw)) : '';
   const { lines, eol } = split(source);
   const token = edge.token, line = lines[token.line]!;
   const original = line.slice(token.start, token.end);
