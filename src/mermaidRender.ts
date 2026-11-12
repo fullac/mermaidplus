@@ -8,6 +8,8 @@ export function loadBundledMermaid() {
 }
 /** ELK 参数调整和 Mermaid 一样，第一次画图时才加载。 */
 let tuningModule: Promise<typeof import('./elkTuning')> | undefined;
+/** 手动位置也只在源码里有位置注释时才加载。 */
+let layoutModule: Promise<[typeof import('./manualLayout'), typeof import('./flowchart')]> | undefined;
 
 export type Density = 'compact' | 'normal' | 'loose';
 export type ThemeChoice = 'auto' | 'default' | 'neutral' | 'forest' | 'dark' | 'base';
@@ -77,6 +79,8 @@ export function renderMermaid(source: string, target: HTMLElement, settings: Ren
       const parsed = new DOMParser().parseFromString(svg, 'text/html').querySelector('svg');
       if (!parsed) throw new Error('Mermaid 没有生成图。');
       const element = doc.importNode(parsed, true) as unknown as SVGSVGElement;
+      element.dataset.mpEdges = orthogonal ? 'orthogonal' : 'curved';
+      if (source.includes('%% mermaid-plus-layout:')) await applyStoredLayout(source, element, target);
       target.replaceChildren(element);
       bindFunctions?.(element);
       return element;
@@ -88,6 +92,21 @@ export function renderMermaid(source: string, target: HTMLElement, settings: Ren
   const result = queue.then(run, run);
   queue = result.catch(() => undefined);
   return result;
+}
+
+/** 按源码里的位置注释移动节点。移动要量尺寸，目标还没放进页面时先在页面外的临时容器里量。 */
+async function applyStoredLayout(source: string, element: SVGSVGElement, target: HTMLElement) {
+  const [{ readLayout, applyManualLayout }, { parseFlowchart }] = await (layoutModule ??= Promise.all([import('./manualLayout'), import('./flowchart')]));
+  const layout = readLayout(source);
+  if (!Object.keys(layout.nodes).length) return;
+  let chart;
+  try { chart = parseFlowchart(source); } catch { return; } // 插件解析不了的写法只显示自动排版。
+  const doc = target.ownerDocument;
+  const holder = target.isConnected ? target : doc.body.appendChild(doc.createElement('div'));
+  if (holder !== target) Object.assign(holder.style, { position: 'absolute', left: '-20000px', top: '0', visibility: 'hidden', width: `${availableWidth(target)}px` });
+  holder.replaceChildren(element);
+  try { applyManualLayout(element, chart, layout); }
+  finally { if (holder !== target) holder.remove(); }
 }
 
 /** 图能占用的宽度：目标元素或其上层第一个有宽度的元素；都量不到时按常见笔记栏宽度估计。 */

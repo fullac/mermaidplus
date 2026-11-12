@@ -1,6 +1,7 @@
 // 用途：把可视化编辑动作转换为对 Mermaid 源码的最小改动——只改涉及的行，其余缩进、注释、顺序和行尾原样保留。
 import { readAnnotations, setNodeStyles } from './annotations';
 import { parseFlowchart, type Flowchart, type Statement } from './flowchart';
+import { clearLayout } from './manualLayout';
 
 export type EditResult = { source: string; select?: { node?: string; edge?: number } };
 
@@ -173,7 +174,7 @@ export function deleteNode(source: string, id: string): EditResult {
   if (!chart.nodes.some(n => n.id === id)) throw new Error(`找不到节点 ${id}。`);
   if (chart.nodes.length === 1) throw new Error('流程图至少要保留一个节点。');
   const removed = new Set(chart.edges.flatMap((edge, i) => edge.from === id || edge.to === id ? [i] : []));
-  return { source: removeAnnotation(rewrite(source, chart, removed, id), id) };
+  return { source: clearLayout(removeAnnotation(rewrite(source, chart, removed, id), id), id) };
 }
 
 /** 只替换首尾不同的那几行，返回替换范围，便于编辑器只改动必要的行。 */

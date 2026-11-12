@@ -201,3 +201,41 @@ test('Esc 先取消选择，再退出编辑', async ({ page }) => {
   await expect(editor(page)).toHaveCount(0);
   await expect(page.getByText('已退出编辑。')).toBeVisible();
 });
+
+test('拖动节点调整位置：写入位置注释，连线跟着重画，可复位', async ({ page }) => {
+  const node = editor(page).locator('[data-node-id="OG"]');
+  const before = (await node.boundingBox())!;
+  const pathsBefore = await edges(page).evaluateAll(els => els.map(el => el.getAttribute('d')));
+  await page.mouse.move(before.x + before.width / 2, before.y + before.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(before.x + before.width / 2 + 40, before.y + before.height / 2 + 10, { steps: 3 });
+  await page.mouse.move(before.x + before.width / 2 + 90, before.y + before.height / 2 + 20, { steps: 3 });
+  await page.mouse.up();
+  await expect.poll(() => sourceText(page)).toContain('%% mermaid-plus-layout:');
+  const source = await sourceText(page);
+  const [dx, dy] = JSON.parse(source.match(/mermaid-plus-layout: (.*)/)![1]!).nodes.OG as [number, number];
+  expect(dx).toBeGreaterThan(30);
+  expect(dy).toBeGreaterThan(0);
+  // 重画后节点仍在新位置，选中不丢，相连的连线变了。
+  await ready(page);
+  await expect(node).toHaveClass(/mp-selected/);
+  const after = (await node.boundingBox())!;
+  expect(after.x - before.x).toBeGreaterThan(20);
+  const pathsAfter = await edges(page).evaluateAll(els => els.map(el => el.getAttribute('d')));
+  expect(pathsAfter.some((d, i) => d !== pathsBefore[i])).toBe(true);
+  // 方向键微调。
+  await page.keyboard.press('ArrowDown');
+  await expect.poll(async () => JSON.parse((await sourceText(page)).match(/mermaid-plus-layout: (.*)/)![1]!).nodes.OG[1]).toBe(dy + 10);
+  // 复位后注释消失，源码与拖动前一致。
+  await ready(page);
+  await editor(page).getByRole('button', { name: '复位' }).click();
+  await expect.poll(() => sourceText(page)).not.toContain('mermaid-plus-layout');
+  await expect(editor(page).getByRole('button', { name: '重置布局' })).toBeHidden();
+});
+
+test('单击节点不会写入位置', async ({ page }) => {
+  const before = await sourceText(page);
+  await editor(page).locator('[data-node-id="OG"]').click();
+  await expect(editor(page).locator('[data-node-id="OG"]')).toHaveClass(/mp-selected/);
+  expect(await sourceText(page)).toBe(before);
+});

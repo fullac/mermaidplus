@@ -2,6 +2,7 @@
 // 本模块在其上叠加类似 Obsidian 白板（Canvas）的交互：点选、悬浮工具条、四边连接点拖拽连线、双击改字或新建节点。
 import { addEdge, addNode, deleteEdge, deleteNode, setEdgeLabel, setNodeLabel, type EditResult } from './edit';
 import { editText, parseFlowchart, type Flowchart } from './flowchart';
+import { clearLayout, createMover, readLayout, setNodeOffset, type Mover } from './manualLayout';
 
 export interface EditorState { node?: string; edge?: number; editing?: boolean }
 
@@ -22,7 +23,7 @@ export interface BlockEditor { update(source: string, state?: EditorState): void
 
 const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform);
 const SVG = 'http://www.w3.org/2000/svg';
-const hint = '单击选中；拖动圆点连线，拖到空白处新建节点；双击改文字，双击空白新建节点；Esc 退出。';
+const hint = '单击选中；拖动节点调整位置，拖动圆点连线；双击改文字，双击空白新建节点；Esc 退出。';
 
 /** 给 Mermaid 生成的 SVG 标上节点编号和连线序号，供点选使用；返回能否完整对应。 */
 export function tagMermaidSvg(svg: SVGSVGElement, chart: Flowchart): boolean {
@@ -65,6 +66,8 @@ export function mountBlockEditor(container: HTMLElement, initialSource: string, 
   let cleanup: void | (() => void);
   let textBox: HTMLTextAreaElement | undefined;
   let drag: { from: string; line: SVGLineElement; x: number; y: number } | undefined;
+  /** 拖动节点：起点（屏幕坐标）、原有偏移、屏幕像素到图坐标的比例；超过 4px 才算开始拖。 */
+  let nodeDrag: { id: string; x: number; y: number; start: [number, number]; scale: number; mover?: Mover; moved: boolean; offset: [number, number] } | undefined;
   /** 拖拽松手后浏览器还会补发一次 click，忽略它，免得清掉刚选中的新节点。 */
   let swallowClick = false;
 
@@ -86,6 +89,7 @@ export function mountBlockEditor(container: HTMLElement, initialSource: string, 
   const addButton = button(toolbar, '新增节点', '新增节点；选中节点时从它连出（也可双击空白处）', () => void apply(s => addNode(s, '新节点', state.node), true));
   const undoButton = button(toolbar, '撤销', `撤销（${isMac ? '⌘Z' : 'Ctrl+Z'}）`, () => void history('undo'));
   const redoButton = button(toolbar, '重做', `重做（${isMac ? '⇧⌘Z' : 'Ctrl+Y'}）`, () => void history('redo'));
+  const resetAllButton = button(toolbar, '重置布局', '所有节点回到自动排版的位置', () => void apply(s => ({ source: clearLayout(s), select: { node: state.node, edge: state.edge } })));
   const doneButton = button(toolbar, '完成', '退出编辑（Esc）', () => host.exit());
   doneButton.classList.add('mp-editor-done');
 
@@ -101,6 +105,7 @@ export function mountBlockEditor(container: HTMLElement, initialSource: string, 
   const menu = doc.createElement('div'); menu.className = 'mp-selection-menu'; menu.setAttribute('role', 'toolbar'); menu.setAttribute('aria-label', '选中项操作');
   const editButton = button(menu, '改文字', '修改文字（Enter 或双击）', () => startText());
   const nextButton = button(menu, '接一个节点', '新增一个节点并从这里连过去', () => { if (state.node) { const from = state.node; void apply(s => addNode(s, '新节点', from), true); } });
+  const resetButton = button(menu, '复位', '回到自动排版的位置', () => { if (state.node) { const id = state.node; void apply(s => ({ source: clearLayout(s, id), select: { node: id } })); } });
   const deleteButton = button(menu, '删除', '删除（Delete）', () => removeSelection());
   const wire = doc.createElementNS(SVG, 'svg'); wire.setAttribute('class', 'mp-wire');
   overlay.append(frame, menu, wire);
@@ -114,6 +119,9 @@ export function mountBlockEditor(container: HTMLElement, initialSource: string, 
     addButton.disabled = busy; undoButton.disabled = busy; redoButton.disabled = busy;
     editButton.disabled = busy; deleteButton.disabled = busy; nextButton.disabled = busy;
     nextButton.hidden = state.node === undefined;
+    const offsets = readLayout(source).nodes;
+    resetButton.disabled = busy; resetButton.hidden = state.node === undefined || !(state.node in offsets);
+    resetAllButton.disabled = busy; resetAllButton.hidden = !Object.keys(offsets).length;
   }
   const diagram = () => [...canvas.children].find(el => el !== overlay)?.querySelector<SVGSVGElement>('svg') ?? null;
   const nodeEl = (id: string) => diagram()?.querySelector<SVGGraphicsElement>(`[data-node-id="${CSS.escape(id)}"]`) ?? null;
@@ -293,8 +301,55 @@ export function mountBlockEditor(container: HTMLElement, initialSource: string, 
     root.classList.add('mp-connecting');
     say('拖到目标节点上松开即可连线；拖到空白处会新建节点。');
   });
+  // 拖动节点调整位置：拖动中只移动画面，松手后把偏移写进源码的位置注释。
+  stage.addEventListener('pointerdown', event => {
+    if (busy || textBox || event.button !== 0) return;
+    const target = event.target as Element;
+    if (menu.contains(target) || target.closest('.mp-handle')) return;
+    // 选中框不接收鼠标，所以点到的就是节点本身。
+    const hit = hitAt(target);
+    const svg = diagram();
+    if (!hit?.node || !svg) return;
+    const rect = svg.getBoundingClientRect(), view = svg.viewBox.baseVal;
+    const scale = view && view.width && rect.width ? view.width / rect.width : 1;
+    const offset = readLayout(source).nodes[hit.node] ?? [0, 0];
+    nodeDrag = { id: hit.node, x: event.clientX, y: event.clientY, start: [offset[0], offset[1]], scale, moved: false, offset: [offset[0], offset[1]] };
+  });
+  function dragNode(event: PointerEvent) {
+    const d = nodeDrag!;
+    const dx = event.clientX - d.x, dy = event.clientY - d.y;
+    if (!d.moved) {
+      if (Math.hypot(dx, dy) < 4) return;
+      const svg = diagram();
+      if (!svg) { nodeDrag = undefined; return; }
+      d.moved = true;
+      d.mover = createMover(svg, parseFlowchart(source));
+      root.classList.add('mp-moving');
+      if (state.node !== d.id) select({ node: d.id });
+      menu.hidden = true;
+    }
+    d.offset = [d.start[0] + dx * d.scale, d.start[1] + dy * d.scale];
+    d.mover!.move({ ...readLayout(source).nodes, [d.id]: d.offset }, false);
+    place(); menu.hidden = true;
+  }
+  function dropNode() {
+    const d = nodeDrag!; nodeDrag = undefined;
+    if (!d.moved) return;
+    root.classList.remove('mp-moving');
+    swallowClick = true; setTimeout(() => { swallowClick = false; }, 0);
+    const [x, y] = d.offset, id = d.id, before = source;
+    void apply(s => ({ source: setNodeOffset(s, id, x, y), select: { node: id } })).then(() => {
+      // 没写入（位置没变或冲突）时把画面恢复到源码里的位置；写入了则已按新源码重画。
+      const svg = diagram();
+      if (disposed || source !== before || !svg) return;
+      try { createMover(svg, parseFlowchart(source)).move(readLayout(source).nodes, true); } catch { /* 解析不了就保持原样 */ }
+      place();
+    });
+  }
+
   const clearDrop = () => { for (const el of canvas.querySelectorAll('.mp-drop-target')) el.classList.remove('mp-drop-target'); };
   const move = (event: PointerEvent) => {
+    if (nodeDrag) { dragNode(event); return; }
     if (!drag) return;
     const p = pointIn(event);
     drag.line.setAttribute('x2', String(p.x)); drag.line.setAttribute('y2', String(p.y));
@@ -303,6 +358,7 @@ export function mountBlockEditor(container: HTMLElement, initialSource: string, 
     if (over?.node) nodeEl(over.node)?.classList.add('mp-drop-target');
   };
   const drop = (event: PointerEvent) => {
+    if (nodeDrag) { dropNode(); return; }
     if (!drag) return;
     const { from, line, x, y } = drag; drag = undefined;
     line.remove(); root.classList.remove('mp-connecting'); clearDrop();
@@ -343,6 +399,13 @@ export function mountBlockEditor(container: HTMLElement, initialSource: string, 
     else if (mod && event.key.toLowerCase() === 'y') { event.preventDefault(); void history('redo'); }
     else if (event.key === 'Enter' || event.key === 'F2') { event.preventDefault(); startText(); }
     else if (event.key === 'Delete' || event.key === 'Backspace') { event.preventDefault(); removeSelection(); }
+    else if (event.key.startsWith('Arrow') && state.node !== undefined) {
+      // 方向键微调选中节点：每次 10，按住 Shift 每次 1。
+      event.preventDefault();
+      const step = event.shiftKey ? 1 : 10, id = state.node;
+      const [dx, dy] = ({ ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] } as Record<string, [number, number]>)[event.key] ?? [0, 0];
+      void apply(s => { const [x, y] = readLayout(s).nodes[id] ?? [0, 0]; return { source: setNodeOffset(s, id, x + dx, y + dy), select: { node: id } }; });
+    }
     else if (event.key === 'Escape') {
       event.preventDefault();
       if (state.node !== undefined || state.edge !== undefined) select({});
