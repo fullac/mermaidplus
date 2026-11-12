@@ -23,11 +23,12 @@ class StyleSettingTab extends PluginSettingTab {
         .onChange(v => save({ fontFamily: v })));
     new Setting(containerEl).setName('字号').setDesc('单位 px。')
       .addSlider(sl => sl.setLimits(10, 22, 1).setValue(s.fontSize).setDynamicTooltip().onChange(v => save({ fontSize: v })));
-    new Setting(containerEl).setName('排版').setDesc('都是 Mermaid 自带的排版方式。ELK 连线更整齐，但图通常更高。')
-      .addDropdown(d => d.addOptions({ dagre: '默认（dagre）', elk: 'ELK' })
-        .setValue(s.layout).onChange(v => save({ layout: v as RenderSettings['layout'] })));
-    new Setting(containerEl).setName('连线拐弯').addDropdown(d => d.addOptions({ basis: '平滑曲线', linear: '直线', step: '直角折线' })
-      .setValue(s.curve).onChange(v => save({ curve: v as RenderSettings['curve'] })));
+    new Setting(containerEl).setName('连线').setDesc('直角走线只有水平和垂直线，用 Mermaid 自带的 ELK 排版；平滑曲线是 Mermaid 默认外观，排得更紧凑。')
+      .addDropdown(d => d.addOptions({ orthogonal: '直角走线', curved: '平滑曲线' })
+        .setValue(s.edges).onChange(v => save({ edges: v as RenderSettings['edges'] })));
+    new Setting(containerEl).setName('连线交叉处').setDesc('仅直角走线有效。')
+      .addDropdown(d => d.addOptions({ arc: '跳线（半圆绕过）', gap: '断开', none: '直接交叉' })
+        .setValue(s.hops).onChange(v => save({ hops: v as RenderSettings['hops'] })));
   }
 }
 
@@ -37,7 +38,10 @@ export default class MermaidPlus extends Plugin {
   private repaintTimer = 0;
 
   async onload() {
-    this.settings = { ...DEFAULT_RENDER_SETTINGS, ...(await this.loadData()) };
+    const saved = (await this.loadData()) ?? {};
+    // 旧版本的“排版 / 连线拐弯”两项已合并为“连线”。
+    delete saved.layout; delete saved.curve;
+    this.settings = { ...DEFAULT_RENDER_SETTINGS, ...saved };
     const editing = new InlineEditing(this, () => this.settings);
     editing.register();
     this.blocks = new DiagramBlocks(this, () => this.settings, editing);

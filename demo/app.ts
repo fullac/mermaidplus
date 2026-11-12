@@ -8,9 +8,9 @@ import { mountBlockEditor, type BlockEditor } from '../src/blockEditor';
 import { DEFAULT_RENDER_SETTINGS, renderMermaid } from '../src/mermaidRender';
 
 // 与插件相同的渲染器和默认样式（Mermaid 默认主题、紧凑间距）。
-// 测试可通过 window.__mpLayout / __mpDensity 切换排版和紧凑程度。
+// 测试可通过 window.__mpEdges / __mpDensity 切换连线方式和紧凑程度。
 const renderNative = async (source: string, target: HTMLElement) => {
-  await renderMermaid(source, target, { ...DEFAULT_RENDER_SETTINGS, layout: (window as any).__mpLayout ?? DEFAULT_RENDER_SETTINGS.layout, density: (window as any).__mpDensity ?? DEFAULT_RENDER_SETTINGS.density });
+  await renderMermaid(source, target, { ...DEFAULT_RENDER_SETTINGS, edges: (window as any).__mpEdges ?? DEFAULT_RENDER_SETTINGS.edges, density: (window as any).__mpDensity ?? DEFAULT_RENDER_SETTINGS.density });
 };
 const app = document.getElementById('app')!;
 let current: { dispose(): void } = createPlayground(app, findMermaidBlocks(example)[0]!.source, renderNative);

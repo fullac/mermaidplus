@@ -74,7 +74,28 @@ test('编辑页就是 Mermaid 原生渲染的图', async ({ page }) => {
   await expect(editor(page).locator('.mp-node-shape')).toHaveCount(0);
 });
 
+test('默认直角走线：连线只有水平和垂直段，没有曲线', async ({ page }) => {
+  const paths = await editor(page).locator('path.flowchart-link').evaluateAll(els => els.map(e => e.getAttribute('d') ?? ''));
+  expect(paths.length).toBeGreaterThan(3);
+  for (const d of paths) {
+    expect(d).not.toMatch(/C/);
+    // 依次取直线段的端点（M/L），相邻两点必须同 x 或同 y。拐角处的小圆角（Q）和跳线（A）在此之外。
+    const tokens = [...d.matchAll(/([MLQA])\s*([^MLQA]*)/g)];
+    let last: number[] | undefined;
+    for (const [, cmd, args] of tokens) {
+      const nums = args!.trim().split(/[\s,]+/).map(Number);
+      const end = nums.slice(-2);
+      if (cmd === 'L' && last) expect(Math.min(Math.abs(end[0]! - last[0]!), Math.abs(end[1]! - last[1]!))).toBeLessThan(0.5);
+      last = end;
+    }
+  }
+});
+
 test('紧凑程度设置生效：默认紧凑的图比 Mermaid 默认间距更小', async ({ page }) => {
+  // ELK 的间距由 Mermaid 固定，紧凑程度主要体现在平滑曲线（dagre）下。
+  await page.addInitScript(() => { (window as any).__mpEdges = 'curved'; });
+  await page.reload();
+  await ready(page);
   const size = async () => {
     const [, , w, h] = (await editor(page).locator('svg').first().getAttribute('viewBox'))!.split(' ').map(Number);
     return w! * h!;

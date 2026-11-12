@@ -1,5 +1,11 @@
 // 用途：插件自带的 Mermaid 渲染器。阅读视图、实时预览和编辑页都用它，保证三处外观一致；样式（主题、紧凑程度、字体）由插件设置决定。
-import mermaid from 'mermaid';
+import type { Mermaid } from 'mermaid';
+
+/** Mermaid 体积很大，第一次真正要画流程图时才初始化，插件启动不再为它付出时间。 */
+let loading: Promise<Mermaid> | undefined;
+export function loadBundledMermaid() {
+  return loading ??= import('mermaid').then(m => m.default);
+}
 
 export type Density = 'compact' | 'normal' | 'loose';
 export type ThemeChoice = 'auto' | 'default' | 'neutral' | 'forest' | 'dark' | 'base';
@@ -10,12 +16,13 @@ export interface RenderSettings {
   /** 留空表示使用 Mermaid 默认字体。 */
   fontFamily: string;
   fontSize: number;
-  curve: 'basis' | 'linear' | 'step';
-  /** Mermaid 内置的两种排版：dagre（默认）与 elk（通常更紧凑、连线更整齐）。 */
-  layout: 'dagre' | 'elk';
+  /** orthogonal：只走水平和垂直线（Mermaid 自带的 ELK 排版）；curved：Mermaid 默认的 dagre 排版加平滑曲线。 */
+  edges: 'orthogonal' | 'curved';
+  /** 直角走线时，连线交叉处画成小半圆跳线（arc）、断开（gap）或直接交叉（none）。 */
+  hops: 'arc' | 'gap' | 'none';
 }
 
-export const DEFAULT_RENDER_SETTINGS: RenderSettings = { theme: 'auto', density: 'compact', fontFamily: '', fontSize: 14, curve: 'basis', layout: 'dagre' };
+export const DEFAULT_RENDER_SETTINGS: RenderSettings = { theme: 'auto', density: 'compact', fontFamily: '', fontSize: 14, edges: 'orthogonal', hops: 'arc' };
 
 /** 节点间距、层间距、节点内边距、整图留白。宽松即 Mermaid 默认值。 */
 export const DENSITY: Record<Density, { nodeSpacing: number; rankSpacing: number; padding: number; diagramPadding: number }> = {
@@ -39,6 +46,8 @@ let queue: Promise<unknown> = Promise.resolve();
 export function renderMermaid(source: string, target: HTMLElement, settings: RenderSettings = DEFAULT_RENDER_SETTINGS): Promise<SVGSVGElement> {
   const run = async () => {
     const doc = target.ownerDocument;
+    const mermaid = await loadBundledMermaid();
+    const orthogonal = settings.edges !== 'curved';
     const fontFamily = settings.fontFamily.trim() || MERMAID_FONT;
     mermaid.initialize({
       startOnLoad: false,
@@ -46,11 +55,12 @@ export function renderMermaid(source: string, target: HTMLElement, settings: Ren
       theme: resolveTheme(settings.theme, doc),
       fontFamily,
       themeVariables: { fontFamily, fontSize: `${settings.fontSize}px` },
-      flowchart: { ...DENSITY[settings.density], curve: settings.curve, htmlLabels: true, useMaxWidth: true, wrappingWidth: 260,
+      flowchart: { ...DENSITY[settings.density], curve: orthogonal ? 'linear' : 'basis', htmlLabels: true, useMaxWidth: true, wrappingWidth: 260,
         // 给子图标题留出位置，避免嵌套子图的标题互相重叠。
         subGraphTitleMargin: { top: 6, bottom: 6 } },
       markdownAutoWrap: true,
-      layout: settings.layout,
+      layout: orthogonal ? 'elk' : 'dagre',
+      elk: { lineHops: settings.hops === 'none' ? false : settings.hops },
     });
     const id = `mp-diagram-${Date.now().toString(36)}-${++serial}`;
     try {
