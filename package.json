@@ -1,6 +1,6 @@
 {
   "name": "mermaid-plus",
-  "version": "0.1.0",
+  "version": "0.4.0",
   "private": true,
   "description": "An interactive Mermaid editor for Obsidian.",
   "scripts": {
@@ -9,6 +9,7 @@
     "test": "tsx --test tests/*.test.ts",
     "build": "npm run typecheck && node esbuild.config.mjs",
     "check": "npm run test && npm run build",
+    "package": "npm run build && node scripts/package.mjs",
     "demo": "node scripts/demo.mjs",
     "demo:build": "node scripts/demo.mjs --build",
     "test:browser": "playwright test"

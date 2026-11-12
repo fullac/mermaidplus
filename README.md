@@ -98,11 +98,15 @@ flowchart LR
 npm run build
 ```
 
-产物为 `dist/main.js`、`dist/manifest.json`、`dist/styles.css`（`dist/mermaid-plus-0.1.0.zip` 为三者打包）。复制到知识库的 `.obsidian/plugins/mermaid-plus/` 并启用即可。`main.js` 约 5 MB，因为打包了完整的 Mermaid。目前只在浏览器演示页中测试过，尚未在真实 Obsidian 中验证。
+产物为 `dist/main.js`、`dist/manifest.json`、`dist/styles.css`。`npm run package` 会在构建后生成 `dist/mermaid-plus-<版本>.zip`（三者打包，解压即得 `mermaid-plus` 目录）。复制到知识库的 `.obsidian/plugins/mermaid-plus/` 并启用即可。`main.js` 约 5 MB，因为打包了完整的 Mermaid。目前只在浏览器演示页中测试过，尚未在真实 Obsidian 中验证。
 
 注释样式实验（文字片段加粗、高亮等）目前只在演示页中提供，插件里已不再包含该命令。
 
 开发过程中未向个人知识库安装插件，尚未做 Obsidian 应用内验收。编辑器与写回逻辑已通过单元测试和浏览器测试，Obsidian 集成部分仅做构建与公开接口类型检查；建议先在单独的测试知识库中试用。
+
+## 版本
+
+版本号写在 `manifest.json` 和 `package.json`，`versions.json` 记录每个版本要求的最低 Obsidian 版本。各版本内容见 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 开发验证
 
