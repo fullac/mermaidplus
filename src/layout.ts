@@ -1,4 +1,5 @@
-// 用途：自动排列已测量的流程图节点，并生成避开节点的直角连线路径。
+// 用途：自动排列已测量的流程图节点与嵌套子图，并生成避开节点的直角连线路径。
+// nodes 尺寸表同时以子图 id 存放子图标题的测量尺寸。
 import type { ElkNode, ElkPoint } from 'elkjs/lib/elk-api';
 import type { Flowchart } from './flowchart';
 
@@ -11,7 +12,7 @@ export interface LayoutSettings {
 export const defaultLayoutSettings: LayoutSettings = { direction: 'auto', spacing: 'normal', lines: 'rounded' };
 export interface PositionedNode extends Size { id: string; x: number; y: number }
 export interface PositionedEdge { index: number; points: ElkPoint[]; label?: Size & ElkPoint }
-export interface DiagramLayout extends Size { direction: string; nodes: PositionedNode[]; edges: PositionedEdge[] }
+export interface DiagramLayout extends Size { direction: string; nodes: PositionedNode[]; groups: PositionedNode[]; edges: PositionedEdge[] }
 export type LayoutExecutor = (graph: ElkNode) => Promise<ElkNode>;
 
 async function arrange(chart: Flowchart, nodes: Map<string, Size>, labels: Size[], direction: string, spacing: LayoutSettings['spacing'], execute: LayoutExecutor): Promise<DiagramLayout> {
@@ -19,6 +20,43 @@ async function arrange(chart: Flowchart, nodes: Map<string, Size>, labels: Size[
   const directions: Record<string, string> = { TB: 'DOWN', BT: 'UP', LR: 'RIGHT', RL: 'LEFT' };
   const sides: Record<string, [string, string]> = { TB: ['NORTH','SOUTH'], BT: ['SOUTH','NORTH'], LR: ['WEST','EAST'], RL: ['EAST','WEST'] };
   const [input, output] = sides[direction]!;
+  const leaf = (node: Flowchart['nodes'][number]): ElkNode => {
+    const size = nodes.get(node.id)!;
+    const ports = (role: 'in' | 'out', side: string) => {
+      const edges = chart.edges.map((edge, index) => ({ edge, index })).filter(({ edge }) => (role === 'in' ? edge.to : edge.from) === node.id);
+      return edges.map(({ index }, order) => {
+        const vertical = side === 'NORTH' || side === 'SOUTH';
+        const length = vertical ? size.width : size.height;
+        const inset = node.shape === 'round' ? Math.min(22, length/3) : 0;
+        const along = inset + (length - 2*inset) * (order+1)/(edges.length+1);
+        const x = vertical ? along : side === 'WEST' ? 0 : size.width;
+        const y = vertical ? side === 'NORTH' ? 0 : size.height : along;
+        return { id: `${node.id}:${role}:${index}`, width: 0, height: 0, x, y, layoutOptions: { 'elk.port.side': side } };
+      });
+    };
+    return { id: node.id, ...size, ports: [...ports('in', input), ...ports('out', output)], layoutOptions: { 'elk.portConstraints': 'FIXED_POS' } };
+  };
+  // 子图作为复合节点：顶部留出标题高度，子节点与外部节点可直接连线。
+  const childrenOf = (parent: string | undefined): ElkNode[] => [
+    ...chart.groups.filter(group => group.parent === parent).map(group => {
+      const title = nodes.get(group.id) ?? { width: 0, height: 0 };
+      // ELK 在 INCLUDE_CHILDREN 下对纵向布局的最小尺寸宽高对调（实测 0.12.1），这里按方向反向传入，保证框宽容纳标题。
+      const minWidth = Math.ceil(title.width) + 40, minHeight = Math.ceil(title.height) + 40;
+      const vertical = direction === 'TB' || direction === 'BT';
+      const children = childrenOf(group.id);
+      // 空子图被 ELK 当作普通节点处理，直接给出固定尺寸。
+      if (!children.length) return { id: group.id, width: minWidth, height: minHeight };
+      return {
+        id: group.id, children,
+        layoutOptions: {
+          'elk.padding': `[top=${Math.ceil(title.height) + 20},left=20,bottom=20,right=20]`,
+          'elk.nodeSize.constraints': 'MINIMUM_SIZE',
+          'elk.nodeSize.minimum': vertical ? `(${minHeight},${minWidth})` : `(${minWidth},${minHeight})`,
+        },
+      };
+    }),
+    ...chart.nodes.filter(node => node.parent === parent).map(leaf),
+  ];
   const graph: ElkNode = {
     id: 'root',
     layoutOptions: {
@@ -32,35 +70,23 @@ async function arrange(chart: Flowchart, nodes: Map<string, Size>, labels: Size[
       'elk.layered.nodePlacement.strategy': 'NETWORK_SIMPLEX',
       'elk.separateConnectedComponents': 'true', 'elk.spacing.componentComponent': String(gap + 20),
       'elk.randomSeed': '1',
+      'elk.hierarchyHandling': 'INCLUDE_CHILDREN', 'elk.json.shapeCoords': 'ROOT', 'elk.json.edgeCoords': 'ROOT',
     },
-    children: chart.nodes.map(node => {
-      const size = nodes.get(node.id)!;
-      const ports = (role: 'in' | 'out', side: string) => {
-        const edges = chart.edges.map((edge, index) => ({ edge, index })).filter(({ edge }) => (role === 'in' ? edge.to : edge.from) === node.id);
-        return edges.map(({ index }, order) => {
-          const vertical = side === 'NORTH' || side === 'SOUTH';
-          const length = vertical ? size.width : size.height;
-          const inset = node.shape === 'round' ? Math.min(22, length/3) : 0;
-          const along = inset + (length - 2*inset) * (order+1)/(edges.length+1);
-          const x = vertical ? along : side === 'WEST' ? 0 : size.width;
-          const y = vertical ? side === 'NORTH' ? 0 : size.height : along;
-          return { id: `${node.id}:${role}:${index}`, width: 0, height: 0, x, y, layoutOptions: { 'elk.port.side': side } };
-        });
-      };
-      return {
-        id: node.id, ...size, ports: [...ports('in', input), ...ports('out', output)],
-        layoutOptions: { 'elk.portConstraints': 'FIXED_POS' },
-      };
-    }),
+    children: childrenOf(undefined),
     edges: chart.edges.map((edge, index) => ({
       id: `edge-${index}`, sources: [`${edge.from}:out:${index}`], targets: [`${edge.to}:in:${index}`],
-      labels: edge.label ? [{ id: `label-${index}`, text: edge.label, ...labels[index]!, layoutOptions: { 'elk.edgeLabels.placement': 'CENTER' } }] : [],
+      labels: edge.label ? [{ id: `label-${index}`, text: edge.label, ...labels[index]!, layoutOptions: { 'elk.edgeLabels.placement': 'CENTER', 'elk.edgeLabels.inline': 'true' } }] : [],
     })),
   };
   const result = await execute(graph);
+  const boxes = new Map<string, ElkNode>();
+  const collect = (node: ElkNode) => { for (const child of node.children ?? []) { boxes.set(child.id, child); collect(child); } };
+  collect(result);
+  const position = (id: string): PositionedNode => { const box = boxes.get(id)!; return { id, x: box.x!, y: box.y!, width: box.width!, height: box.height! }; };
   return {
     width: result.width!, height: result.height!, direction,
-    nodes: result.children!.map(node => ({ id: node.id, x: node.x!, y: node.y!, width: node.width!, height: node.height! })),
+    nodes: chart.nodes.map(node => position(node.id)),
+    groups: chart.groups.map(group => position(group.id)),
     edges: result.edges!.map(edge => {
       const section = edge.sections?.[0];
       if (!section || edge.sections!.length !== 1) throw new Error('布局器未返回完整连线路径。');
@@ -70,7 +96,7 @@ async function arrange(chart: Flowchart, nodes: Map<string, Size>, labels: Size[
       // ELK 将端口固定在包围矩形边上；补一段同方向延长线，贴到菱形实际斜边。
       for (const [id, side, isStart] of [[chart.edges[index]!.from, output, true], [chart.edges[index]!.to, input, false]] as const) {
         if (chart.nodes.find(n => n.id === id)?.shape !== 'diamond') continue;
-        const box = result.children!.find(n => n.id === id)!;
+        const box = boxes.get(id)!;
         const p = { ...(isStart ? points[0]! : points.at(-1)!) };
         if (side === 'NORTH' || side === 'SOUTH') {
           const offset = Math.abs(p.x-box.x!-box.width!/2)*box.height!/box.width!;

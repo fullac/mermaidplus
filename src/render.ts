@@ -25,7 +25,7 @@ export async function renderEnhanced(container: HTMLElement, source: string, set
       label.style.maxWidth = node.shape === 'diamond' ? '180px' : '240px';
       const annotation = annotations.find(a => a.node === node.id);
       let styles = annotation?.styles ?? [];
-      if (annotation && annotation.label !== node.label) {
+      if (annotation && annotation.label !== node.raw) {
         warnings.push(`节点 ${node.id} 的原始文字已变化，样式已跳过。`); styles = [];
       }
       const resolved = resolveStyles(node.label, styles);
@@ -44,6 +44,12 @@ export async function renderEnhanced(container: HTMLElement, source: string, set
       labels.set(node.id, label);
     }
     for (const a of annotations) if (!labels.has(a.node)) warnings.push(`找不到节点 ${a.node}，样式已跳过。`);
+    // 子图标题尺寸与节点共用尺寸表，布局时据此留出标题区。
+    for (const group of chart.groups) {
+      const title = doc.createElement('div'); title.className = 'mp-group-measure'; title.textContent = group.title;
+      measuring.append(title);
+      sizes.set(group.id, { width: title.offsetWidth, height: title.offsetHeight });
+    }
     const edgeSizes = chart.edges.map(edge => {
       const label = doc.createElement('span'); label.className = 'mp-edge-measure'; label.textContent = edge.label;
       measuring.append(label);
@@ -70,16 +76,34 @@ export async function renderEnhanced(container: HTMLElement, source: string, set
     });
     marker.append(make('path', { d: 'M 0 0 L 10 5 L 0 10 z', fill: 'currentColor' }));
     defs.append(marker); svg.append(defs);
+    // 外层子图先画，保证内层子图、连线和节点都在其上方。
+    for (const group of chart.groups) {
+      const box = layout.groups.find(box => box.id === group.id)!;
+      const frame = make('g', { 'data-group-id': group.id, transform: `translate(${box.x},${box.y})` });
+      frame.append(make('rect', { width: box.width, height: box.height, rx: 10, class: 'mp-group-shape' }));
+      // 标题与测量使用同一宽度上限和换行规则，长标题换行而不是溢出框外。
+      const size = sizes.get(group.id)!;
+      const holder = make('foreignObject', { x: 14, y: 10, width: Math.max(0, box.width - 28), height: Math.ceil(size.height) + 2 });
+      const title = doc.createElement('div'); title.className = 'mp-group-title'; title.textContent = group.title;
+      holder.append(title); frame.append(holder); svg.append(frame);
+    }
     for (const route of layout.edges) {
       const edge = chart.edges[route.index]!;
-      const path = make('path', { d: edgePath(route.points, settings.lines === 'rounded' ? 8 : 0), class: 'mp-edge', 'data-edge-index': route.index });
+      const path = make('path', { d: edgePath(route.points, settings.lines === 'rounded' ? 8 : 0), class: `mp-edge mp-edge-${edge.style}`, 'data-edge-index': route.index });
       if (edge.arrow) path.setAttribute('marker-end', `url(#${arrowId})`);
+      if (edge.arrow && edge.link.startsWith('<')) path.setAttribute('marker-start', `url(#${arrowId})`);
       svg.append(path);
+      // 透明的粗线只用来扩大点选范围，不参与显示。
+      svg.append(make('path', { d: path.getAttribute('d')!, class: 'mp-edge-hit', 'data-edge-index': route.index }));
       if (edge.label && route.label) {
         const box = route.label;
-        svg.append(make('rect', { x: box.x, y: box.y, width: box.width, height: box.height, rx: 4, class: 'mp-edge-label-bg' }));
-        const text = make('text', { x: box.x + box.width/2, y: box.y + box.height/2, class: 'mp-edge-label', 'text-anchor': 'middle', 'dominant-baseline': 'central' });
-        text.textContent = edge.label; svg.append(text);
+        svg.append(make('rect', { x: box.x, y: box.y, width: box.width, height: box.height, rx: 4, class: 'mp-edge-label-bg', 'data-edge-index': route.index }));
+        const text = make('text', { x: box.x + box.width/2, y: box.y + box.height/2, class: 'mp-edge-label', 'data-edge-index': route.index, 'text-anchor': 'middle', 'dominant-baseline': 'central' });
+        const lines = edge.label.split('\n');
+        lines.forEach((line, i) => {
+          const span = make('tspan', { x: box.x + box.width/2, dy: i ? '1.3em' : `${-(lines.length - 1) * .65}em` }); span.textContent = line; text.append(span);
+        });
+        svg.append(text);
       }
     }
     for (const node of chart.nodes) {

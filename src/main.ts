@@ -1,38 +1,71 @@
-// 用途：在 Obsidian 内打开注释样式实验窗口，读取当前流程图但不修改笔记。
-import { Component, MarkdownRenderer, Modal, Notice, Plugin } from 'obsidian';
-import { findMermaidBlocks } from './flowchart';
-import { createPlayground } from './playground';
+// 用途：插件入口——用插件自带的渲染器和样式画流程图，在图上原位可视化编辑并写回笔记；提供样式设置。
+import { App, Notice, Plugin, PluginSettingTab, Setting } from 'obsidian';
+import type { EditorView } from '@codemirror/view';
+import { InlineEditing } from './obsidianEdit';
+import { DiagramBlocks } from './obsidianRender';
+import { DEFAULT_RENDER_SETTINGS, type Density, type RenderSettings, type ThemeChoice } from './mermaidRender';
 
-class StylePreviewModal extends Modal {
-  private cleanup?: () => void;
-  constructor(plugin: Plugin, private source: string, private sourcePath: string) { super(plugin.app); }
-  onOpen() {
-    this.modalEl.classList.add('mp-modal');
-    const view = createPlayground(this.contentEl, this.source, async (source, target) => {
-      const component = new Component(); component.load();
-      // 选择不会被草稿中的反引号提前关闭的围栏。
-      const longest = Math.max(2, ...[...source.matchAll(/`+/g)].map(m => m[0].length));
-      const fence = '`'.repeat(longest + 1);
-      try {
-        await MarkdownRenderer.render(this.app, `${fence}mermaid\n${source}\n${fence}`, target, this.sourcePath, component);
-        return () => component.unload();
-      } catch (error) { component.unload(); throw error; }
-    });
-    this.cleanup = view.dispose;
+class StyleSettingTab extends PluginSettingTab {
+  constructor(app: App, private plugin: MermaidPlus) { super(app, plugin); }
+  display() {
+    const { containerEl } = this;
+    containerEl.empty();
+    const s = this.plugin.settings;
+    const save = (change: Partial<RenderSettings>) => this.plugin.updateSettings(change);
+    new Setting(containerEl).setName('配色主题').setDesc('“跟随明暗”在浅色模式用 Mermaid 默认主题，深色模式用暗色主题。')
+      .addDropdown(d => d.addOptions({ auto: '跟随明暗', default: '默认', neutral: '中性', forest: '森林', dark: '暗色', base: '基础' })
+        .setValue(s.theme).onChange(v => save({ theme: v as ThemeChoice })));
+    new Setting(containerEl).setName('紧凑程度').setDesc('节点间距、层间距和节点内边距。宽松即 Mermaid 默认值。')
+      .addDropdown(d => d.addOptions({ compact: '紧凑', normal: '适中', loose: '宽松' })
+        .setValue(s.density).onChange(v => save({ density: v as Density })));
+    new Setting(containerEl).setName('字体').setDesc('CSS 字体名，可写多个用逗号分隔；留空使用 Mermaid 默认字体。例如：var(--font-interface)')
+      .addText(t => t.setPlaceholder('"trebuchet ms", verdana, arial, sans-serif').setValue(s.fontFamily)
+        .onChange(v => save({ fontFamily: v })));
+    new Setting(containerEl).setName('字号').setDesc('单位 px。')
+      .addSlider(sl => sl.setLimits(10, 22, 1).setValue(s.fontSize).setDynamicTooltip().onChange(v => save({ fontSize: v })));
+    new Setting(containerEl).setName('排版').setDesc('都是 Mermaid 自带的排版方式。ELK 连线更整齐，但图通常更高。')
+      .addDropdown(d => d.addOptions({ dagre: '默认（dagre）', elk: 'ELK' })
+        .setValue(s.layout).onChange(v => save({ layout: v as RenderSettings['layout'] })));
+    new Setting(containerEl).setName('连线拐弯').addDropdown(d => d.addOptions({ basis: '平滑曲线', linear: '直线', step: '直角折线' })
+      .setValue(s.curve).onChange(v => save({ curve: v as RenderSettings['curve'] })));
   }
-  onClose() { this.cleanup?.(); }
 }
 
 export default class MermaidPlus extends Plugin {
+  settings: RenderSettings = { ...DEFAULT_RENDER_SETTINGS };
+  private blocks?: DiagramBlocks;
+  private repaintTimer = 0;
+
   async onload() {
+    this.settings = { ...DEFAULT_RENDER_SETTINGS, ...(await this.loadData()) };
+    const editing = new InlineEditing(this, () => this.settings);
+    editing.register();
+    this.blocks = new DiagramBlocks(this, () => this.settings, editing);
+    this.blocks.register();
+    this.addSettingTab(new StyleSettingTab(this.app, this));
+    // 切换明暗模式时，“跟随明暗”的图需要重画。
+    this.registerEvent(this.app.workspace.on('css-change', () => { if (this.settings.theme === 'auto') this.scheduleRepaint(); }));
     this.addCommand({
-      id: 'preview-comment-styles', name: '预览 Mermaid 注释样式（实验）',
+      id: 'edit-flowchart', name: '编辑光标所在的 Mermaid 流程图',
       editorCallback: (editor, context) => {
-        const cursor = editor.getCursor().line;
-        const block = findMermaidBlocks(editor.getValue()).find(b => b.start <= cursor && cursor <= b.end);
-        if (!block) { new Notice('请将光标放在 Mermaid 代码块内。'); return; }
-        new StylePreviewModal(this, block.source, context.file?.path ?? '').open();
+        // Obsidian 的 Editor 在实时预览下带有 CodeMirror 视图（cm），这是官方插件常用的取法。
+        const view = (editor as unknown as { cm?: EditorView }).cm;
+        if (!view || !context.file) { new Notice('请在实时预览模式下使用此命令，或在阅读视图中点击图右上角的“编辑”。'); return; }
+        editing.editAtCursor(view, context.file.path, editor.getCursor().line);
       },
     });
+  }
+
+  onunload() { window.clearTimeout(this.repaintTimer); }
+
+  async updateSettings(change: Partial<RenderSettings>) {
+    this.settings = { ...this.settings, ...change };
+    await this.saveData(this.settings);
+    this.scheduleRepaint();
+  }
+
+  private scheduleRepaint() {
+    window.clearTimeout(this.repaintTimer);
+    this.repaintTimer = window.setTimeout(() => void this.blocks?.repaint(), 250);
   }
 }

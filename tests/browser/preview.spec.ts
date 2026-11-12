@@ -53,7 +53,7 @@ test('修改节点文字后旧样式不会错绑；损坏注释不破坏普通�
 
 test('未知语法明确停止增强；恢复示例可以继续使用', async ({ page }) => {
   const textarea = page.getByRole('textbox', { name: 'Mermaid 源码草稿' });
-  const unknown = 'flowchart TD\nsubgraph Demo\nA --> B\nend';
+  const unknown = 'flowchart TD\nA & B --> C';
   await textarea.fill(unknown);
   await page.getByRole('button', { name: '刷新预览' }).click();
   await expect(page.locator('.mp-enhanced')).toContainText('暂不支持增强渲染');

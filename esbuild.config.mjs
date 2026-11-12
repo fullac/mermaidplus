@@ -1,6 +1,6 @@
 // 用途：构建 Obsidian 插件，并将可安装文件集中到 dist 目录。
 import { context } from 'esbuild';
-import { mkdir, copyFile, readFile } from 'node:fs/promises';
+import { mkdir, copyFile } from 'node:fs/promises';
 
 await mkdir('dist', { recursive: true });
 for (const file of ['manifest.json', 'styles.css']) await copyFile(file, `dist/${file}`);
@@ -10,11 +10,23 @@ const ctx = await context({
   bundle: true,
   format: 'cjs',
   target: 'es2022',
-  external: ['obsidian'],
+  external: ['obsidian', '@codemirror/state', '@codemirror/view'],
   sourcemap: false,
+  minify: !process.argv.includes('--watch'),
+  metafile: true,
+  legalComments: 'none',
   logLevel: 'info',
-  banner: { js: '/* Bundled elkjs 0.12.1, unmodified: https://github.com/kieler/elkjs/tree/v0.12.1\n'
-    + await readFile('node_modules/elkjs/LICENSE.md', 'utf8') + '\n*/' },
+  banner: { js: '/* Bundled mermaid (MIT License, https://github.com/mermaid-js/mermaid) and its dependencies; see their package licenses. */' },
 });
 if (process.argv.includes('--watch')) await ctx.watch();
-else { await ctx.rebuild(); await ctx.dispose(); }
+else {
+  const result = await ctx.rebuild(); await ctx.dispose();
+  if (process.argv.includes('--analyze')) {
+    const sizes = {};
+    for (const [file, info] of Object.entries(result.metafile.outputs['dist/main.js'].inputs)) {
+      const pkg = file.match(/node_modules\/((?:@[^/]+\/)?[^/]+)/)?.[1] ?? 'src';
+      sizes[pkg] = (sizes[pkg] ?? 0) + info.bytesInOutput;
+    }
+    for (const [pkg, size] of Object.entries(sizes).sort((a, b) => b[1] - a[1]).slice(0, 20)) console.log(`${(size / 1024).toFixed(0).padStart(6)} KB  ${pkg}`);
+  }
+}

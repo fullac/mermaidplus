@@ -1,25 +1,60 @@
-// 用途：用独立 Mermaid 渲染器与增强渲染器对照同一份注释样式样例。
-import mermaid from 'mermaid';
+// 用途：用插件自带的 Mermaid 渲染器与增强渲染器对照同一份注释样式样例，并用内存中的“笔记”试用可视化编辑。
 import example from '../examples/annotation-styles.md';
 import layoutExample from '../examples/auto-layout.md';
+import subgraphExample from '../examples/subgraph.md';
 import { findMermaidBlocks } from '../src/flowchart';
 import { createPlayground } from '../src/playground';
+import { mountBlockEditor, type BlockEditor } from '../src/blockEditor';
+import { DEFAULT_RENDER_SETTINGS, renderMermaid } from '../src/mermaidRender';
 
-mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', theme: 'neutral', fontFamily: 'system-ui' });
-let serial = 0;
+// 与插件相同的渲染器和默认样式（Mermaid 默认主题、紧凑间距）。
+// 测试可通过 window.__mpLayout / __mpDensity 切换排版和紧凑程度。
 const renderNative = async (source: string, target: HTMLElement) => {
-  const id = `native-${++serial}`;
-  try {
-    const result = await mermaid.render(id, source, target);
-    // 这里只插入 Mermaid 在 strict 模式下生成的 SVG，不插入用户标签 HTML。
-    target.innerHTML = result.svg;
-  } finally { document.getElementById(`d${id}`)?.remove(); }
+  await renderMermaid(source, target, { ...DEFAULT_RENDER_SETTINGS, layout: (window as any).__mpLayout ?? DEFAULT_RENDER_SETTINGS.layout, density: (window as any).__mpDensity ?? DEFAULT_RENDER_SETTINGS.density });
 };
 const app = document.getElementById('app')!;
-let playground = createPlayground(app, findMermaidBlocks(example)[0]!.source, renderNative);
+let current: { dispose(): void } = createPlayground(app, findMermaidBlocks(example)[0]!.source, renderNative);
 for (const [id, source] of [['style-example', example], ['layout-example', layoutExample]]) {
   document.getElementById(id!)!.addEventListener('click', () => {
-    playground.dispose();
-    playground = createPlayground(app, findMermaidBlocks(source!)[0]!.source, renderNative);
+    current.dispose();
+    current = createPlayground(app, findMermaidBlocks(source!)[0]!.source, renderNative);
   });
 }
+
+/** 模拟一篇笔记：源码存在内存里，撤销栈与冲突检查和 Obsidian 阅读视图的做法一致。 */
+function openEditorDemo() {
+  current.dispose();
+  app.replaceChildren();
+  let note = findMermaidBlocks(subgraphExample)[0]!.source;
+  const undo: [string, string][] = [], redo: [string, string][] = [];
+  const shown = document.createElement('pre'); shown.className = 'mp-demo-source'; shown.setAttribute('aria-label', '当前源码');
+  const external = document.createElement('button'); external.type = 'button'; external.textContent = '模拟别处修改';
+  const holder = document.createElement('div');
+  app.append(holder, external, shown);
+  const show = () => { shown.textContent = note; };
+  let editor: BlockEditor | undefined;
+  const mount = () => {
+    editor?.dispose();
+    editor = mountBlockEditor(holder, note, {
+      draw: renderNative,
+      async commit(before, after) {
+        if (note !== before) return false;
+        undo.push([before, after]); redo.length = 0; note = after; show(); return true;
+      },
+      async undo() {
+        const step = undo.pop(); if (!step || note !== step[1]) return null;
+        redo.push(step); note = step[0]; show(); return note;
+      },
+      async redo() {
+        const step = redo.pop(); if (!step || note !== step[0]) return null;
+        undo.push(step); note = step[1]; show(); return note;
+      },
+      exit() { editor?.dispose(); editor = undefined; holder.textContent = '已退出编辑。'; },
+    });
+  };
+  external.addEventListener('click', () => { note = note.replace('TG --> JAVA', 'TG --> JAVA\n    JAVA --> MA'); show(); });
+  show(); mount();
+  current = { dispose() { editor?.dispose(); app.replaceChildren(); } };
+}
+document.getElementById('editor-example')!.addEventListener('click', openEditorDemo);
+if (location.hash === '#editor') openEditorDemo();

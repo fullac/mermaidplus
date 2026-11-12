@@ -73,7 +73,7 @@ export function createPlayground(root: HTMLElement, initialSource: string, nativ
       enhanced.replaceChildren(...enhancedStage.childNodes);
       const old = nodeSelect.value; nodeSelect.replaceChildren();
       for (const node of parseFlowchart(value).nodes) {
-        const option = element('option', nodeSelect, `${node.id} · ${node.label}`); option.value = node.id;
+        const option = element('option', nodeSelect, `${node.id} · ${node.label.replace(/\n/g, " ")}`); option.value = node.id;
       }
       if ([...nodeSelect.options].some(o => o.value === old)) nodeSelect.value = old;
       apply.disabled = !nodeSelect.value; clear.disabled = !nodeSelect.value;
@@ -103,10 +103,10 @@ export function createPlayground(root: HTMLElement, initialSource: string, nativ
       const node = parseFlowchart(source.value).nodes.find(n => n.id === nodeSelect.value);
       if (!node) return;
       const a = readAnnotations(source.value).annotations.find(a => a.node === node.id);
-      if (a && a.label !== node.label && !clearAll) throw new Error('原始文字已变化，请先明确清除该节点旧样式，再添加新样式。');
-      const styles = a?.label === node.label ? [...a.styles] : [];
+      if (a && a.label !== node.raw && !clearAll) throw new Error('原始文字已变化，请先明确清除该节点旧样式，再添加新样式。');
+      const styles = a?.label === node.raw ? [...a.styles] : [];
       if (!clearAll) styles.push({ text: fragment.value, type: styleSelect.value as StyleType });
-      source.value = setNodeStyles(source.value, node.id, node.label, clearAll ? [] : styles);
+      source.value = setNodeStyles(source.value, node.id, node.raw, clearAll ? [] : styles);
       void render();
     } catch (error) { status.textContent = String(error); }
   }
