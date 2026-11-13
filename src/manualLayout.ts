@@ -1,6 +1,7 @@
 // 用途：手动调整的节点位置。位置以“相对自动排版的偏移”保存在一行 `%% mermaid-plus-layout: {...}` 注释中，
 // Mermaid 把它当作注释忽略；插件在 Mermaid 画完后移动这些节点，并重画与之相连的连线、撑开所在子图。
 import type { Flowchart } from './flowchart';
+import { avoidText } from './edgeAvoid';
 
 export interface ManualLayout { version: 1; nodes: Record<string, [number, number]> }
 const LINE = /^\s*%% mermaid-plus-layout:\s*(.*)$/;
@@ -264,6 +265,8 @@ export function createMover(svg: SVGSVGElement, chart: Flowchart): Mover {
       }
     }
     if (fit) fitView();
+    // 重画后的连线和回到原样的连线都可能压到挪过的节点文字，统一再避让一次（在定好画布之后，绕出去的线再撑开画布）。
+    try { avoidText(svg, fit); } catch { /* 保留上面算出的连线 */ }
   }
 
   /** 画布包住所有内容，四周留白与 Mermaid 原来的一样。 */

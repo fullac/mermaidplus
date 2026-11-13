@@ -10,6 +10,8 @@ export function loadBundledMermaid() {
 let tuningModule: Promise<typeof import('./elkTuning')> | undefined;
 /** 手动位置也只在源码里有位置注释时才加载。 */
 let layoutModule: Promise<[typeof import('./manualLayout'), typeof import('./flowchart')]> | undefined;
+/** 连线避让文字。 */
+let avoidModule: Promise<typeof import('./edgeAvoid')> | undefined;
 
 export type Density = 'compact' | 'normal' | 'loose';
 export type ThemeChoice = 'auto' | 'default' | 'neutral' | 'forest' | 'dark' | 'base';
@@ -85,6 +87,10 @@ export function renderMermaid(source: string, target: HTMLElement, settings: Ren
       const background = settings.background.trim();
       if (background) { element.style.backgroundColor = background; element.style.borderRadius = '6px'; }
       if (source.includes('%% mermaid-plus-layout:')) await applyStoredLayout(source, element, target);
+      // 压到文字的连线绕开；连线画在节点之上，连线文字在最上层。只读 SVG 属性，不需要先放进页面。
+      const { avoidText, edgesOnTop } = await (avoidModule ??= import('./edgeAvoid'));
+      try { avoidText(element); } catch { /* 避让失败时保留 Mermaid 原来的连线 */ }
+      edgesOnTop(element);
       target.replaceChildren(element);
       bindFunctions?.(element);
       return element;
