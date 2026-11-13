@@ -59,3 +59,13 @@ test('连线：错开时直角走 Z 字形，曲线模式用三次贝塞尔', ()
   const side = routeEdge(a, { x: 400, y: 20, width: 100, height: 40 }, true, { start: 0, end: 0 });
   assert.equal(side.d, 'M100,30L400,30');
 });
+
+test('图类型：流程图和时序图由插件渲染，其他类型不接管', async () => {
+  const { diagramKind, isPluginSource, isFlowchartSource } = await import('../src/mermaidRender');
+  assert.equal(diagramKind('flowchart LR\n A-->B'), 'flowchart');
+  assert.equal(diagramKind('%% 注释\n\ngraph TD\n A-->B'), 'flowchart');
+  assert.equal(diagramKind('---\ntitle: 登录\n---\nsequenceDiagram\n A->>B: 你好'), 'sequence');
+  assert.equal(diagramKind('classDiagram\n A <|-- B'), undefined);
+  assert.ok(isPluginSource('sequenceDiagram\n A->>B: hi'));
+  assert.ok(!isFlowchartSource('sequenceDiagram\n A->>B: hi'));
+});

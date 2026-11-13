@@ -1,10 +1,10 @@
-// 用途：接管笔记中的 mermaid 代码块：流程图用插件自带的渲染器和样式画出，其余图类型仍用 Obsidian 自带的 Mermaid；设置变化时重画。
+// 用途：接管笔记中的 mermaid 代码块：流程图和时序图用插件自带的渲染器和样式画出，其余图类型仍用 Obsidian 自带的 Mermaid；设置变化时重画。
 // Obsidian 自带 mermaid 渲染，插件通常无法再注册同名代码块处理器。因此另有两条兜底路径（只用公开接口和页面 DOM）：
 //   阅读视图——用排序靠前的 Markdown 后处理器，在 Obsidian 画图前（或画完后）换成插件画的图；
 //   实时预览——在编辑器里找到 Obsidian 画好的图块，隐藏原图，在旁边放插件画的图。
 import { MarkdownRenderChild, loadMermaid, type MarkdownPostProcessorContext, type Plugin } from 'obsidian';
 import { findMermaidBlocks } from './flowchart';
-import { isFlowchartSource, renderMermaid, type RenderSettings } from './mermaidRender';
+import { isFlowchartSource, isPluginSource, renderMermaid, type RenderSettings } from './mermaidRender';
 import type { InlineEditing } from './obsidianEdit';
 
 interface Drawn { el: HTMLElement; source: string }
@@ -57,7 +57,7 @@ export class DiagramBlocks {
     if (isFlowchartSource(source)) this.editing.attach(el, ctx);
   }
 
-  /** 阅读视图兜底：把这一段里的 mermaid 流程图换成插件画的图。Obsidian 若稍后才画完原图，再次清掉。 */
+  /** 阅读视图兜底：把这一段里的 mermaid 流程图、时序图换成插件画的图。Obsidian 若稍后才画完原图，再次清掉。 */
   private claimSection(section: HTMLElement, ctx: MarkdownPostProcessorContext) {
     const check = () => {
       if (section.querySelector('.mp-diagram')) { this.dropNative(section); return true; }
@@ -68,7 +68,7 @@ export class DiagramBlocks {
         const info = ctx.getSectionInfo(section);
         source = info ? findMermaidBlocks(info.text).find(b => b.start === info.lineStart)?.source ?? null : null;
       }
-      if (source === null || !isFlowchartSource(source)) return source !== null;
+      if (source === null || !isPluginSource(source)) return source !== null;
       const host = section.ownerDocument.createElement('div');
       section.append(host);
       this.dropNative(section);
@@ -111,7 +111,7 @@ export class DiagramBlocks {
     let holder = el.querySelector<HTMLElement>(':scope > .mp-diagram-svg');
     if (!holder) { holder = el.ownerDocument.createElement('div'); holder.className = 'mp-diagram-svg'; el.prepend(holder); }
     try {
-      if (isFlowchartSource(source)) await renderMermaid(source, holder, this.settings());
+      if (isPluginSource(source)) await renderMermaid(source, holder, this.settings());
       else await renderWithObsidian(source, holder);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -121,11 +121,11 @@ export class DiagramBlocks {
     }
   }
 
-  /** 样式设置改变后重画所有仍在页面上的流程图。 */
+  /** 样式设置改变后重画所有仍在页面上的流程图和时序图。 */
   async repaint() {
     for (const entry of [...this.drawn]) {
       if (!entry.el.isConnected) { this.drawn.delete(entry); continue; }
-      if (isFlowchartSource(entry.source)) await this.paint(entry);
+      if (isPluginSource(entry.source)) await this.paint(entry);
     }
   }
 }

@@ -4,7 +4,7 @@ import { ViewPlugin, type EditorView, type ViewUpdate } from '@codemirror/view';
 import { mountBlockEditor, type BlockEditor, type EditHost, type EditorState } from './blockEditor';
 import { findMermaidBlocks, parseFlowchart } from './flowchart';
 import { blockChange, locate } from './writeBack';
-import { isFlowchartSource, renderMermaid, type RenderSettings } from './mermaidRender';
+import { isFlowchartSource, isPluginSource, renderMermaid, type RenderSettings } from './mermaidRender';
 
 /** 一个代码块的位置：笔记路径 + 开头围栏所在行（从 0 开始）。 */
 interface BlockRef { path: string; line: number }
@@ -148,7 +148,9 @@ export class InlineEditing {
       let line: number;
       try { line = view.state.doc.lineAt(view.posAtDOM(embed)).number - 1; } catch { continue; }
       const block = blocks.find(b => line >= b.start && line <= b.end) ?? blocks.find(b => Math.abs(b.start - line) <= 1);
-      if (!block || !isFlowchart(block.source)) continue;
+      if (!block || !isPluginSource(block.source)) continue;
+      // 时序图只换成插件画的图，不提供编辑。
+      if (!isFlowchart(block.source)) { this.onLiveEmbed?.(embed, block.source); continue; }
       const ref: BlockRef = { path: file.path, line: block.start };
       this.claim(embed, file.path, block.start, block.source);
       this.onLiveEmbed?.(embed, block.source);

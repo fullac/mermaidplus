@@ -1,4 +1,4 @@
-// 用途：插件自带的 Mermaid 渲染器。阅读视图、实时预览和编辑页都用它，保证三处外观一致；样式（主题、紧凑程度、字体）由插件设置决定。
+// 用途：插件自带的 Mermaid 渲染器，负责流程图和时序图。阅读视图、实时预览和编辑页都用它，保证三处外观一致；样式（主题、紧凑程度、字体）由插件设置决定。
 import type { Mermaid } from 'mermaid';
 
 /** Mermaid 体积很大，第一次真正要画流程图时才初始化，插件启动不再为它付出时间。 */
@@ -43,6 +43,13 @@ export const DENSITY: Record<Density, { nodeSpacing: number; rankSpacing: number
   loose: { nodeSpacing: 50, rankSpacing: 50, padding: 15, diagramPadding: 8 },
 };
 
+/** 时序图的间距：参与者之间、消息之间、方框和注释的留白、参与者框高度。宽松即 Mermaid 默认值（画布留白与流程图一致）。 */
+export const SEQUENCE_DENSITY: Record<Density, { actorMargin: number; messageMargin: number; boxMargin: number; noteMargin: number; height: number }> = {
+  compact: { actorMargin: 30, messageMargin: 26, boxMargin: 6, noteMargin: 6, height: 44 },
+  normal: { actorMargin: 40, messageMargin: 30, boxMargin: 8, noteMargin: 8, height: 54 },
+  loose: { actorMargin: 50, messageMargin: 35, boxMargin: 10, noteMargin: 10, height: 65 },
+};
+
 const MERMAID_FONT = '"trebuchet ms", verdana, arial, sans-serif';
 
 function resolveTheme(choice: ThemeChoice, doc: Document) {
@@ -66,7 +73,12 @@ export function renderMermaid(source: string, target: HTMLElement, settings: Ren
       securityLevel: 'strict',
       theme: resolveTheme(settings.theme, doc),
       fontFamily,
+      // 时序图按顶层 fontSize 统一各处字号，不设会用 Mermaid 默认的 16px。
+      fontSize: settings.fontSize,
       themeVariables: { fontFamily, fontSize: `${settings.fontSize}px` },
+      // 时序图：间距按紧凑程度，字体字号与流程图一致；直角走线开启时，发给自己的消息也画成直角。
+      sequence: { ...SEQUENCE_DENSITY[settings.density], diagramMarginX: DENSITY[settings.density].diagramPadding, diagramMarginY: DENSITY[settings.density].diagramPadding, useMaxWidth: true, rightAngles: orthogonal,
+        actorFontFamily: fontFamily, messageFontFamily: fontFamily, noteFontFamily: fontFamily, actorFontSize: settings.fontSize, messageFontSize: settings.fontSize, noteFontSize: settings.fontSize },
       flowchart: { ...DENSITY[settings.density], curve: orthogonal ? 'linear' : 'basis', htmlLabels: true, useMaxWidth: true, wrappingWidth: 260,
         // 给子图标题留出位置，避免嵌套子图的标题互相重叠。
         subGraphTitleMargin: { top: 6, bottom: 6 } },
@@ -76,9 +88,14 @@ export function renderMermaid(source: string, target: HTMLElement, settings: Ren
     });
     const id = `mp-diagram-${Date.now().toString(36)}-${++serial}`;
     try {
-      const text = settings.vertical ? withVerticalHeader(source) : source;
-      const tuning = { density: settings.density, vertical: settings.vertical, autoDirection: settings.autoDirection, availableWidth: availableWidth(target) };
-      const { svg, bindFunctions } = await (await (tuningModule ??= import('./elkTuning'))).withElkTuning(tuning, () => mermaid.render(id, text));
+      const flowchart = isFlowchartSource(source);
+      let rendered;
+      if (flowchart) {
+        const text = settings.vertical ? withVerticalHeader(source) : source;
+        const tuning = { density: settings.density, vertical: settings.vertical, autoDirection: settings.autoDirection, availableWidth: availableWidth(target) };
+        rendered = await (await (tuningModule ??= import('./elkTuning'))).withElkTuning(tuning, () => mermaid.render(id, text));
+      } else rendered = await mermaid.render(id, source);
+      const { svg, bindFunctions } = rendered;
       // strict 模式下 Mermaid 已清理用户标签中的 HTML；这里按 HTML 解析以兼容其中的 <br> 等写法，只取出 svg 元素。
       const parsed = new DOMParser().parseFromString(svg, 'text/html').querySelector('svg');
       if (!parsed) throw new Error('Mermaid 没有生成图。');
@@ -86,11 +103,13 @@ export function renderMermaid(source: string, target: HTMLElement, settings: Ren
       element.dataset.mpEdges = orthogonal ? 'orthogonal' : 'curved';
       const background = settings.background.trim();
       if (background) { element.style.backgroundColor = background; element.style.borderRadius = '6px'; }
-      if (source.includes('%% mermaid-plus-layout:')) await applyStoredLayout(source, element, target);
-      // 压到文字的连线绕开；连线画在节点之上，连线文字在最上层。只读 SVG 属性，不需要先放进页面。
-      const { avoidText, edgesOnTop } = await (avoidModule ??= import('./edgeAvoid'));
-      try { avoidText(element); } catch { /* 避让失败时保留 Mermaid 原来的连线 */ }
-      edgesOnTop(element);
+      if (flowchart) {
+        if (source.includes('%% mermaid-plus-layout:')) await applyStoredLayout(source, element, target);
+        // 压到文字的连线绕开；连线画在节点之上，连线文字在最上层。只读 SVG 属性，不需要先放进页面。
+        const { avoidText, edgesOnTop } = await (avoidModule ??= import('./edgeAvoid'));
+        try { avoidText(element); } catch { /* 避让失败时保留 Mermaid 原来的连线 */ }
+        edgesOnTop(element);
+      }
       target.replaceChildren(element);
       bindFunctions?.(element);
       return element;
@@ -139,15 +158,22 @@ export function withVerticalHeader(source: string) {
   return lines.join('\n');
 }
 
-/** 第一行（跳过注释和 front matter）是 flowchart / graph 时返回 true。 */
-export function isFlowchartSource(source: string) {
+/** 图的类型：插件负责渲染的流程图和时序图，其余返回 undefined（仍由 Obsidian 自带的 Mermaid 显示）。只看第一行（跳过注释和 front matter）。 */
+export function diagramKind(source: string): 'flowchart' | 'sequence' | undefined {
   const lines = source.split(/\r?\n/);
   let i = 0;
   if (lines[0]?.trim() === '---') { i = 1; while (i < lines.length && lines[i]!.trim() !== '---') i++; i++; }
   for (; i < lines.length; i++) {
     const line = lines[i]!.trim();
     if (!line || line.startsWith('%%')) continue;
-    return /^(flowchart|graph)\b/.test(line);
+    if (/^(flowchart|graph)\b/.test(line)) return 'flowchart';
+    if (/^sequenceDiagram\b/.test(line)) return 'sequence';
+    return undefined;
   }
-  return false;
+  return undefined;
 }
+
+/** 是流程图（可以可视化编辑）。 */
+export const isFlowchartSource = (source: string) => diagramKind(source) === 'flowchart';
+/** 插件负责渲染（流程图或时序图）。 */
+export const isPluginSource = (source: string) => diagramKind(source) !== undefined;

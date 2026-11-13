@@ -29,7 +29,7 @@ Obsidian 插件，用于改进 Mermaid 流程图的显示效果，并支持在�
 
 ### 适用范围
 
-仅处理流程图（`flowchart` / `graph`）。时序图等其他类型仍由 Obsidian 内置的 Mermaid 渲染。
+渲染流程图（`flowchart` / `graph`）和时序图（`sequenceDiagram`）。时序图使用与流程图相同的主题、字体、字号、背景和紧凑程度设置；开启直角走线时，发给自己的消息画成直角。可视化编辑仅支持流程图。其他图类型仍由 Obsidian 内置的 Mermaid 渲染。
 
 ## 安装
 
