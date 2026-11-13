@@ -1,6 +1,7 @@
 // 用途：构建 Obsidian 插件，并将可安装文件集中到 dist 目录。
 import { context } from 'esbuild';
 import { mkdir, copyFile } from 'node:fs/promises';
+import { onlyUsedMermaid } from './scripts/onlyUsedMermaid.mjs';
 
 await mkdir('dist', { recursive: true });
 for (const file of ['manifest.json', 'styles.css']) await copyFile(file, `dist/${file}`);
@@ -14,6 +15,7 @@ const ctx = await context({
   sourcemap: false,
   minify: !process.argv.includes('--watch'),
   metafile: true,
+  plugins: [onlyUsedMermaid],
   legalComments: 'none',
   logLevel: 'info',
   banner: { js: '/* Bundled mermaid (MIT License, https://github.com/mermaid-js/mermaid) and its dependencies; see their package licenses. */' },
