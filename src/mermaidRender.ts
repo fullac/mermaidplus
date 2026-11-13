@@ -32,7 +32,7 @@ export interface RenderSettings {
   background: string;
 }
 
-export const DEFAULT_RENDER_SETTINGS: RenderSettings = { theme: 'auto', density: 'compact', fontFamily: '', fontSize: 14, edges: 'orthogonal', hops: 'arc', vertical: false, autoDirection: false, background: '' };
+export const DEFAULT_RENDER_SETTINGS: RenderSettings = { theme: 'default', density: 'compact', fontFamily: '', fontSize: 14, edges: 'curved', hops: 'arc', vertical: false, autoDirection: false, background: '#fafafa' };
 
 /** 节点间距、层间距、节点内边距、整图留白。宽松即 Mermaid 默认值。 */
 export const DENSITY: Record<Density, { nodeSpacing: number; rankSpacing: number; padding: number; diagramPadding: number }> = {

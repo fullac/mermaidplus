@@ -74,7 +74,10 @@ test('编辑页就是 Mermaid 原生渲染的图', async ({ page }) => {
   await expect(editor(page).locator('.mp-node-shape')).toHaveCount(0);
 });
 
-test('默认直角走线：连线只有水平和垂直段，没有曲线', async ({ page }) => {
+test('直角走线：连线只有水平和垂直段，没有曲线', async ({ page }) => {
+  await page.addInitScript(() => { (window as any).__mpEdges = 'orthogonal'; });
+  await page.reload();
+  await ready(page);
   const paths = await editor(page).locator('path.flowchart-link').evaluateAll(els => els.map(e => e.getAttribute('d') ?? ''));
   expect(paths.length).toBeGreaterThan(3);
   for (const d of paths) {
