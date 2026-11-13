@@ -1,5 +1,6 @@
 // 用途：插件自带的 Mermaid 渲染器，负责流程图和时序图。阅读视图、实时预览和编辑页都用它，保证三处外观一致；样式（主题、紧凑程度、字体）由插件设置决定。
 import type { Mermaid } from 'mermaid';
+import { markCanvasTone } from './canvasTone';
 
 /** Mermaid 体积很大，第一次真正要画流程图时才初始化，插件启动不再为它付出时间。 */
 let loading: Promise<Mermaid> | undefined;
@@ -51,6 +52,8 @@ export const SEQUENCE_DENSITY: Record<Density, { actorMargin: number; messageMar
 };
 
 const MERMAID_FONT = '"trebuchet ms", verdana, arial, sans-serif';
+/** 阅读视图里宽图的最小显示比例。和方向评分用的 MIN_READABLE_SCALE 分开，改其中一个不影响另一个。 */
+export const MIN_DISPLAY_SCALE = 0.65;
 
 function resolveTheme(choice: ThemeChoice, doc: Document) {
   if (choice !== 'auto') return choice;
@@ -60,9 +63,14 @@ function resolveTheme(choice: ThemeChoice, doc: Document) {
 let serial = 0;
 /** Mermaid 的配置是全局的，渲染逐个排队，避免互相覆盖配置。 */
 let queue: Promise<unknown> = Promise.resolve();
+const targetRevision = new WeakMap<HTMLElement, number>();
 
-/** 把源码渲染成 SVG 放进 target，返回 svg 元素。出错时抛出 Mermaid 的错误信息。 */
-export function renderMermaid(source: string, target: HTMLElement, settings: RenderSettings = DEFAULT_RENDER_SETTINGS): Promise<SVGSVGElement> {
+/** 把源码渲染成 SVG 放进 target，返回 svg 元素。出错时抛出 Mermaid 的错误信息；请求已被更新的渲染取代时返回 null。 */
+export function renderMermaid(source: string, target: HTMLElement, settings: RenderSettings = DEFAULT_RENDER_SETTINGS): Promise<SVGSVGElement | null> {
+  const revision = (targetRevision.get(target) ?? 0) + 1;
+  targetRevision.set(target, revision);
+  // 复制配置，避免等待全局渲染队列期间被设置面板修改。
+  settings = { ...settings };
   const run = async () => {
     const doc = target.ownerDocument;
     const mermaid = await loadBundledMermaid();
@@ -87,33 +95,53 @@ export function renderMermaid(source: string, target: HTMLElement, settings: Ren
       elk: { lineHops: settings.hops === 'none' ? false : settings.hops },
     });
     const id = `mp-diagram-${Date.now().toString(36)}-${++serial}`;
+    const renderHost = stagingHost(doc, target);
     try {
       const flowchart = isFlowchartSource(source);
       let rendered;
       if (flowchart) {
         const text = settings.vertical ? withVerticalHeader(source) : source;
         const tuning = { density: settings.density, vertical: settings.vertical, autoDirection: settings.autoDirection, availableWidth: availableWidth(target) };
-        rendered = await (await (tuningModule ??= import('./elkTuning'))).withElkTuning(tuning, () => mermaid.render(id, text));
-      } else rendered = await mermaid.render(id, source);
+        rendered = await (await (tuningModule ??= import('./elkTuning'))).withElkTuning(tuning, () => mermaid.render(id, text, renderHost));
+      } else rendered = await mermaid.render(id, source, renderHost);
       const { svg, bindFunctions } = rendered;
       // strict 模式下 Mermaid 已清理用户标签中的 HTML；这里按 HTML 解析以兼容其中的 <br> 等写法，只取出 svg 元素。
       const parsed = new DOMParser().parseFromString(svg, 'text/html').querySelector('svg');
       if (!parsed) throw new Error('Mermaid 没有生成图。');
       const element = doc.importNode(parsed, true) as unknown as SVGSVGElement;
       element.dataset.mpEdges = orthogonal ? 'orthogonal' : 'curved';
+      element.dataset.mpHops = settings.hops;
       const background = settings.background.trim();
-      if (background) { element.style.backgroundColor = background; element.style.borderRadius = '6px'; }
+      element.dataset.mpBackground = background;
+      // Mermaid 自身可能写入主题底色；整栏背景统一交给外层。
+      element.style.backgroundColor = 'transparent';
       if (flowchart) {
         if (source.includes('%% mermaid-plus-layout:')) await applyStoredLayout(source, element, target);
         // 压到文字的连线绕开；连线画在节点之上，连线文字在最上层。只读 SVG 属性，不需要先放进页面。
-        const { avoidText, edgesOnTop } = await (avoidModule ??= import('./edgeAvoid'));
-        try { avoidText(element); } catch { /* 避让失败时保留 Mermaid 原来的连线 */ }
+        const { avoidText, edgesOnTop, applyLineHops } = await (avoidModule ??= import('./edgeAvoid'));
+        try { avoidText(element); applyLineHops(element); } catch { /* 避让失败时保留 Mermaid 原来的连线 */ }
         edgesOnTop(element);
+        const viewWidth = Number(element.getAttribute('viewBox')?.split(/[\s,]+/)[2]);
+        if (viewWidth > 0) {
+          element.dataset.mpMinScale = String(MIN_DISPLAY_SCALE);
+          element.style.minWidth = `${viewWidth * MIN_DISPLAY_SCALE}px`;
+        }
       }
-      target.replaceChildren(element);
       bindFunctions?.(element);
+      // 旧任务可以完成计算，但不能覆盖同一容器的新请求。
+      if (targetRevision.get(target) === revision) {
+        target.classList.add('mp-diagram-surface');
+        target.style.backgroundColor = background;
+        markCanvasTone(target, { theme: resolveTheme(settings.theme, doc), background });
+        target.replaceChildren(element);
+      }
       return element;
+    } catch (error) {
+      // 已过期任务的错误也不能让宿主把新画面换成错误提示。
+      if (targetRevision.get(target) !== revision) return null;
+      throw error;
     } finally {
+      renderHost.remove();
       // 渲染失败时 Mermaid 会在页面上留下临时元素。
       doc.getElementById(`d${id}`)?.remove();
     }
@@ -123,6 +151,14 @@ export function renderMermaid(source: string, target: HTMLElement, settings: Ren
   return result;
 }
 
+/** 离屏测量容器：渲染和套用位置注释都用它，宽度取目标所在栏。 */
+function stagingHost(doc: Document, target: HTMLElement): HTMLElement {
+  const host = doc.body.appendChild(doc.createElement('div'));
+  host.className = 'mp-render-staging';
+  Object.assign(host.style, { position: 'absolute', left: '-20000px', top: '0', visibility: 'hidden', width: `${availableWidth(target)}px` });
+  return host;
+}
+
 /** 按源码里的位置注释移动节点。移动要量尺寸，目标还没放进页面时先在页面外的临时容器里量。 */
 async function applyStoredLayout(source: string, element: SVGSVGElement, target: HTMLElement) {
   const [{ readLayout, applyManualLayout }, { parseFlowchart }] = await (layoutModule ??= Promise.all([import('./manualLayout'), import('./flowchart')]));
@@ -130,12 +166,10 @@ async function applyStoredLayout(source: string, element: SVGSVGElement, target:
   if (!Object.keys(layout.nodes).length) return;
   let chart;
   try { chart = parseFlowchart(source); } catch { return; } // 插件解析不了的写法只显示自动排版。
-  const doc = target.ownerDocument;
-  const holder = target.isConnected ? target : doc.body.appendChild(doc.createElement('div'));
-  if (holder !== target) Object.assign(holder.style, { position: 'absolute', left: '-20000px', top: '0', visibility: 'hidden', width: `${availableWidth(target)}px` });
+  const holder = stagingHost(target.ownerDocument, target);
   holder.replaceChildren(element);
   try { applyManualLayout(element, chart, layout); }
-  finally { if (holder !== target) holder.remove(); }
+  finally { holder.remove(); }
 }
 
 /** 图能占用的宽度：目标元素或其上层第一个有宽度的元素；都量不到时按常见笔记栏宽度估计。 */

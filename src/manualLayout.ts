@@ -1,7 +1,7 @@
 // 用途：手动调整的节点位置。位置以“相对自动排版的偏移”保存在一行 `%% mermaid-plus-layout: {...}` 注释中，
 // Mermaid 把它当作注释忽略；插件在 Mermaid 画完后移动这些节点，并重画与之相连的连线、撑开所在子图。
 import type { Flowchart } from './flowchart';
-import { avoidText } from './edgeAvoid';
+import { avoidText, applyLineHops, shiftPath } from './edgeAvoid';
 
 export interface ManualLayout { version: 1; nodes: Record<string, [number, number]> }
 const LINE = /^\s*%% mermaid-plus-layout:\s*(.*)$/;
@@ -241,7 +241,13 @@ export function createMover(svg: SVGSVGElement, chart: Flowchart): Mover {
     for (const edge of edgeItems) {
       const hit = edge.path.nextElementSibling?.classList.contains('mp-edge-hit') ? edge.path.nextElementSibling : null;
       const touched = current[edge.from] || current[edge.to] || [edge.from, edge.to].some(id => groups.find(g => g.id === id && movedInside(g)));
-      if (!touched || edge.from === edge.to) {
+      if (touched && edge.from === edge.to) {
+        const offset = offsetOf(edge.from), d = shiftPath(edge.d, offset.x, offset.y);
+        edge.path.setAttribute('d', d); hit?.setAttribute('d', d);
+        if (edge.label && edge.labelBase) edge.label.setAttribute('transform', `translate(${edge.labelBase.x + offset.x}, ${edge.labelBase.y + offset.y})`);
+        continue;
+      }
+      if (!touched) {
         edge.path.setAttribute('d', edge.d); edge.path.setAttribute('style', edge.style); hit?.setAttribute('d', edge.d);
         if (edge.label && edge.labelBase) edge.label.setAttribute('transform', `translate(${edge.labelBase.x}, ${edge.labelBase.y})`);
         continue;
@@ -266,7 +272,7 @@ export function createMover(svg: SVGSVGElement, chart: Flowchart): Mover {
     }
     if (fit) fitView();
     // 重画后的连线和回到原样的连线都可能压到挪过的节点文字，统一再避让一次（在定好画布之后，绕出去的线再撑开画布）。
-    try { avoidText(svg, fit); } catch { /* 保留上面算出的连线 */ }
+    try { avoidText(svg, fit); if (fit) applyLineHops(svg); } catch { /* 保留上面算出的连线 */ }
   }
 
   /** 画布包住所有内容，四周留白与 Mermaid 原来的一样。 */
@@ -288,15 +294,10 @@ export function createMover(svg: SVGSVGElement, chart: Flowchart): Mover {
     const view = anyMoved ? { x: content.x - left, y: content.y - top, w: content.width + left + right, h: content.height + top + bottom } : { x, y, w, h };
     svg.setAttribute('viewBox', `${view.x} ${view.y} ${view.w} ${view.h}`);
     if (svg.style.maxWidth) svg.style.maxWidth = `${view.w}px`;
+    if (svg.dataset.mpMinScale) svg.style.minWidth = `${view.w * Number(svg.dataset.mpMinScale)}px`;
   }
 
   return { move, box: id => nodeBoxAt(id, offsetOf(id)) ?? (() => { const g = groups.find(x => x.id === id); return g ? g.base : undefined; })() };
-}
-
-/** 把只含 M / L / C 和数字对的路径整体平移。 */
-function shiftPath(d: string, dx: number, dy: number) {
-  let i = 0;
-  return d.replace(/(-?[\d.]+),(-?[\d.]+)/g, (_, x: string, y: string) => { i++; return `${round(Number(x) + dx)},${round(Number(y) + dy)}`; });
 }
 
 /** 按源码中的位置注释调整一张刚渲染的图；没有注释时什么都不做。 */

@@ -4,6 +4,7 @@ import { addEdge, addNode, deleteEdge, deleteNode, setEdgeLabel, setNodeLabel, t
 import { editText, parseFlowchart, type Flowchart } from './flowchart';
 import { toggleMark, type Mark } from './markdownLabel';
 import { clearLayout, createMover, readLayout, setNodeOffset, type Mover } from './manualLayout';
+import { copyCanvasTone } from './canvasTone';
 
 export interface EditorState { node?: string; edge?: number; editing?: boolean }
 
@@ -72,7 +73,13 @@ export function mountBlockEditor(container: HTMLElement, initialSource: string, 
   let source = initialSource, state: EditorState = { ...initialState };
   let busy = false, disposed = false, revision = 0;
   let cleanup: void | (() => void);
+  let displayedSource = '', rendering = false;
+  let pendingRender: { source: string; revision: number; focusText: boolean } | undefined;
+  let renderTimer: ReturnType<typeof setTimeout> | undefined;
+  const renderWaiters: (() => void)[] = [];
   let textBox: HTMLTextAreaElement | undefined;
+  /** 改字后先改画面上的文字；重画失败时用它还原。 */
+  let undoLabels: (() => void) | undefined;
   let drag: { from: string; line: SVGLineElement; x: number; y: number } | undefined;
   /** 拖动节点：起点（屏幕坐标）、原有偏移、屏幕像素到图坐标的比例；超过 4px 才算开始拖。 */
   let nodeDrag: { id: string; x: number; y: number; start: [number, number]; scale: number; mover?: Mover; moved: boolean; offset: [number, number] } | undefined;
@@ -180,25 +187,52 @@ export function mountBlockEditor(container: HTMLElement, initialSource: string, 
     syncButtons();
   }
 
-  async function render(focusText = false) {
-    const current = ++revision;
-    closeText(false);
+  // 同一编辑器最多一个计算任务；连续编辑只保留最后一份源码。
+  function render(focusText = false): Promise<void> {
+    pendingRender = { source, revision: ++revision, focusText };
+    clearTimeout(renderTimer);
+    renderTimer = setTimeout(() => void flushRender(), displayedSource ? 80 : 0);
+    return new Promise(resolve => renderWaiters.push(resolve));
+  }
+
+  async function flushRender() {
+    if (disposed || rendering || !pendingRender) return;
+    if (textBox || nodeDrag) { renderTimer = setTimeout(() => void flushRender(), 80); return; }
+    const request = pendingRender; pendingRender = undefined; rendering = true;
+    try { await drawOnce(request.source, request.revision, request.focusText); }
+    finally {
+      rendering = false;
+      if (pendingRender && !disposed) renderTimer = setTimeout(() => void flushRender(), 80);
+      else renderWaiters.splice(0).forEach(resolve => resolve());
+    }
+  }
+
+  async function drawOnce(snapshot: string, current: number, focusText: boolean) {
+    const previousHeight = canvas.getBoundingClientRect().height;
+    canvas.style.minHeight = `${previousHeight}px`;
     const staging = doc.createElement('div'); staging.className = 'mp-editor-staging';
     staging.style.width = `${stage.clientWidth || container.clientWidth || 600}px`;
     root.append(staging);
     let nextCleanup: void | (() => void) = undefined;
     try {
-      const chart = parseFlowchart(source);
-      nextCleanup = await host.draw(source, staging);
+      const chart = parseFlowchart(snapshot);
+      nextCleanup = await host.draw(snapshot, staging);
+      // 用户在后台排版期间又开始输入或拖动时，保留正在操作的画面。
+      while (!disposed && current === revision && (textBox || nodeDrag)) await new Promise(resolve => setTimeout(resolve, 40));
       if (disposed || current !== revision) return;
       const drawn = staging.querySelector<SVGSVGElement>('svg');
       if (!drawn) throw new Error('Mermaid 没有生成图。');
       const complete = tagMermaidSvg(drawn, chart);
-      const view = doc.createElement('div'); view.className = 'mp-editor-diagram';
+      const view = doc.createElement('div'); view.className = 'mp-editor-diagram mp-diagram-surface';
+      view.style.backgroundColor = drawn.dataset.mpBackground ?? '';
+      stage.style.backgroundColor = drawn.dataset.mpBackground ?? '';
+      copyCanvasTone(staging, root);
       view.append(...staging.childNodes);
       cleanup?.(); cleanup = nextCleanup; nextCleanup = undefined;
       for (const child of [...canvas.children]) if (child !== overlay) child.remove();
       canvas.prepend(view);
+      undoLabels = undefined;
+      displayedSource = snapshot;
       const keep: EditorState = {};
       if (state.node && chart.nodes.some(n => n.id === state.node)) keep.node = state.node;
       if (state.edge !== undefined && chart.edges[state.edge]) keep.edge = state.edge;
@@ -207,8 +241,16 @@ export function mountBlockEditor(container: HTMLElement, initialSource: string, 
       if (focusText) startText();
     } catch (error) {
       if (disposed || current !== revision) return;
+      undoLabels?.(); undoLabels = undefined;
+      // 这次没画成，但源码已经是新的；下次重画必须再走一遍，不能当成已经显示。
+      if (displayedSource === snapshot) displayedSource = '';
       say(`无法编辑：${error instanceof Error ? error.message : String(error)}`);
-    } finally { nextCleanup?.(); staging.remove(); }
+    } finally {
+      nextCleanup?.(); staging.remove();
+      doc.defaultView?.requestAnimationFrame(() => {
+        if (!disposed && current === revision) canvas.style.minHeight = '';
+      });
+    }
   }
 
   async function apply(edit: (source: string) => EditResult, editText = false) {
@@ -216,16 +258,50 @@ export function mountBlockEditor(container: HTMLElement, initialSource: string, 
     let result: EditResult;
     try { result = edit(source); } catch (error) { say(error instanceof Error ? error.message : String(error)); return; }
     if (result.source === source) return;
+    const shown = source;
     busy = true; syncButtons();
     try {
-      const ok = await host.commit(source, result.source);
+      const ok = await host.commit(shown, result.source);
       if (disposed) return;
       if (!ok) { say('这个代码块在别处被改过了，这次没有写入。请退出后重新编辑。'); return; }
       source = result.source;
       state = { node: result.select?.node, edge: result.select?.edge, editing: editText };
       host.remember?.(state);
     } finally { busy = false; syncButtons(); }
+    const svg = diagram();
+    let previous: Flowchart | undefined, next: Flowchart | undefined;
+    try { previous = parseFlowchart(shown); next = parseFlowchart(source); } catch { /* 解析不了就整图重画 */ }
+    // 仅位置注释变化不改变尺寸或拓扑，直接更新已有图，不再调用 Mermaid。
+    if (svg && previous && next && displayedSource === shown && !rendering && !pendingRender && clearLayout(shown) === clearLayout(source)) {
+      createMover(svg, next).move(readLayout(source).nodes);
+      displayedSource = source; select(state);
+      if (editText) startText();
+      return;
+    }
+    if (previous && next) previewLabels(previous, next);
     await render(editText);
+  }
+
+  /** 只替换已存在标签的文字，使用 textContent。重画失败时由 drawOnce 还原。 */
+  function previewLabels(before: Flowchart, after: Flowchart) {
+    const saved: { el: HTMLElement; text: string }[] = [];
+    if (before.nodes.length !== after.nodes.length || before.edges.length !== after.edges.length) return;
+    const update = (target: Element | null | undefined, value: string) => {
+      const content = target?.querySelector<HTMLElement>('foreignObject > div');
+      if (!content) return;
+      saved.push({ el: content, text: content.textContent ?? '' });
+      content.textContent = value; content.style.overflow = 'hidden';
+    };
+    for (const node of after.nodes) {
+      const old = before.nodes.find(n => n.id === node.id);
+      if (old && old.raw !== node.raw) update(nodeEl(node.id), node.label);
+    }
+    after.edges.forEach((edge, i) => {
+      const old = before.edges[i]!;
+      if (old.from === edge.from && old.to === edge.to && old.raw !== edge.raw) update(edgeEls(i).find(el => el.classList.contains('edgeLabel')), edge.label);
+    });
+    place();
+    undoLabels = () => { for (const item of saved) item.el.textContent = item.text; place(); };
   }
 
   async function history(kind: 'undo' | 'redo') {
@@ -246,14 +322,21 @@ export function mountBlockEditor(container: HTMLElement, initialSource: string, 
   }
 
   /** 在选中对象上方覆盖一个文本框；Enter 保存，Shift+Enter 换行，Esc 取消。 */
+  function currentRaw(): string | undefined {
+    const chart = parseFlowchart(source);
+    if (state.node !== undefined) return chart.nodes.find(n => n.id === state.node)?.raw;
+    if (state.edge !== undefined) return chart.edges[state.edge]?.raw;
+    return undefined;
+  }
+
   function startText() {
     if (busy || (state.node === undefined && state.edge === undefined)) return;
     closeText(false);
-    const chart = parseFlowchart(source);
+    const raw = currentRaw();
     const target = state.node !== undefined ? nodeEl(state.node)
       : edgeEls(state.edge!).find(el => el.classList.contains('edgeLabel')) ?? edgeEls(state.edge!).find(el => el.tagName.toLowerCase() === 'path' && !el.classList.contains('mp-edge-hit'));
-    if (!target) return;
-    const value = editText(state.node !== undefined ? chart.nodes.find(n => n.id === state.node)!.raw : chart.edges[state.edge!]!.raw);
+    if (raw === undefined || !target) return;
+    const value = editText(raw);
     const b = box(target);
     const input = doc.createElement('textarea');
     input.className = 'mp-editor-text';
@@ -307,15 +390,10 @@ export function mountBlockEditor(container: HTMLElement, initialSource: string, 
     textBox = undefined; input.remove(); formatBar.hidden = true;
     if (!save) { place(); return; }
     const text = input.value;
-    if (state.node !== undefined) {
-      const id = state.node, node = parseFlowchart(source).nodes.find(n => n.id === id);
-      if (node && editText(node.raw) === text.trim()) { place(); return; }
-      void apply(s => setNodeLabel(s, id, text));
-    } else if (state.edge !== undefined) {
-      const index = state.edge, edge = parseFlowchart(source).edges[index];
-      if (edge && editText(edge.raw) === text.trim()) { place(); return; }
-      void apply(s => setEdgeLabel(s, index, text));
-    }
+    const raw = currentRaw();
+    if (raw !== undefined && editText(raw) === text.trim()) { place(); return; }
+    if (state.node !== undefined) { const id = state.node; void apply(s => setNodeLabel(s, id, text)); }
+    else if (state.edge !== undefined) { const index = state.edge; void apply(s => setEdgeLabel(s, index, text)); }
   }
 
   function hitAt(target: EventTarget | null): EditorState | null {
@@ -465,7 +543,18 @@ export function mountBlockEditor(container: HTMLElement, initialSource: string, 
   say('正在渲染…');
   void render(initialState.editing).then(() => { if (!initialState.editing && !disposed) root.focus({ preventScroll: true }); });
   return {
-    update(next, nextState) { source = next; if (nextState) state = { ...nextState }; void render(nextState?.editing); },
+    update(next, nextState) {
+      const draft = textBox?.value;
+      const editing = !!(textBox && draft !== undefined && editText(currentRaw() ?? '') !== draft.trim());
+      if (next !== source && textBox) closeText(false);
+      source = next; if (nextState) state = { ...nextState };
+      else if (editing) state = { ...state, editing: true };
+      void render(nextState?.editing || editing).then(() => {
+        if (!editing || draft === undefined || disposed || !textBox) return;
+        textBox.value = draft;
+        say('源码已在别处修改，正在输入的文字已保留，按 Enter 再试一次。');
+      });
+    },
     source: () => source,
     adopt(next) {
       if (root.parentElement === next) return;
@@ -475,7 +564,8 @@ export function mountBlockEditor(container: HTMLElement, initialSource: string, 
       place();
     },
     dispose() {
-      disposed = true; revision++; textBox = undefined;
+      disposed = true; revision++; textBox = undefined; pendingRender = undefined;
+      clearTimeout(renderTimer); renderWaiters.splice(0).forEach(resolve => resolve());
       doc.removeEventListener('pointermove', move, true); doc.removeEventListener('pointerup', drop, true);
       resize?.disconnect(); cleanup?.(); root.remove();
     },

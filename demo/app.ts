@@ -4,7 +4,8 @@ import layoutExample from '../examples/auto-layout.md';
 import subgraphExample from '../examples/subgraph.md';
 import { findMermaidBlocks } from '../src/flowchart';
 import { createPlayground } from '../src/playground';
-import { mountBlockEditor, type BlockEditor } from '../src/blockEditor';
+import { mountBlockEditor, type BlockEditor, type EditHost } from '../src/blockEditor';
+import { mountSequenceEditor } from '../src/sequenceEditor';
 import { DEFAULT_RENDER_SETTINGS, renderMermaid } from '../src/mermaidRender';
 
 // 与插件相同的渲染器和默认样式（Mermaid 默认主题、紧凑间距）。
@@ -20,6 +21,14 @@ for (const [id, source] of [['style-example', example], ['layout-example', layou
     current = createPlayground(app, findMermaidBlocks(source!)[0]!.source, renderNative);
   });
 }
+
+const sequenceExample = `sequenceDiagram
+    participant 用户 as 访客
+    participant API
+    用户->>API: 查询
+    API-->>用户: 返回结果
+    Note over 用户,API: 同步完成
+`;
 
 /** 模拟一篇笔记：源码存在内存里，撤销栈与冲突检查和 Obsidian 阅读视图的做法一致。 */
 function openEditorDemo() {
@@ -56,5 +65,54 @@ function openEditorDemo() {
   show(); mount();
   current = { dispose() { editor?.dispose(); app.replaceChildren(); } };
 }
+
+/** 时序图编辑：源码存在内存里。编辑器自己的「源码」退出，「编辑」重新进入。 */
+function openSequenceDemo(initial = sequenceExample) {
+  current.dispose();
+  app.replaceChildren();
+  let note = initial;
+  const undo: [string, string][] = [], redo: [string, string][] = [];
+  const shown = document.createElement('pre'); shown.className = 'mp-demo-source'; shown.setAttribute('aria-label', '当前源码');
+  const bar = document.createElement('div'); bar.className = 'mp-entry-bar'; bar.setAttribute('role', 'toolbar'); bar.setAttribute('aria-label', '时序图操作');
+  const sourceButton = document.createElement('button'); sourceButton.type = 'button'; sourceButton.className = 'mp-entry-button'; sourceButton.textContent = '源码';
+  const editButton = document.createElement('button'); editButton.type = 'button'; editButton.className = 'mp-entry-button'; editButton.textContent = '编辑'; editButton.setAttribute('aria-label', '在图上编辑这张时序图');
+  bar.append(sourceButton, editButton);
+  const holder = document.createElement('div');
+  app.append(bar, holder, shown);
+  const show = () => { shown.textContent = note; };
+  let editor: BlockEditor | undefined;
+  const host: EditHost = {
+    draw: renderNative,
+    async commit(before, after) {
+      if (note !== before) return false;
+      undo.push([before, after]); redo.length = 0; note = after; show(); return true;
+    },
+    async undo() {
+      const step = undo.pop(); if (!step || note !== step[1]) return null;
+      redo.push(step); note = step[0]; show(); return note;
+    },
+    async redo() {
+      const step = redo.pop(); if (!step || note !== step[0]) return null;
+      undo.push(step); note = step[1]; show(); return note;
+    },
+    exit() { editor?.dispose(); editor = undefined; holder.replaceChildren(); },
+  };
+  sourceButton.addEventListener('click', () => host.exit());
+  editButton.addEventListener('click', () => { editor?.dispose(); editor = mountSequenceEditor(holder, note, host); });
+  show();
+  editor = mountSequenceEditor(holder, note, host);
+  Object.assign(app, { __editor: editor });
+  current = { dispose() { editor?.dispose(); app.replaceChildren(); } };
+}
 document.getElementById('editor-example')!.addEventListener('click', openEditorDemo);
 if (location.hash === '#editor') openEditorDemo();
+if (location.hash.startsWith('#sequence')) openSequenceDemo(location.hash.includes('alt') ? `sequenceDiagram
+    participant A
+    participant B
+    A->>B: 请求
+    alt 成功
+        B-->>A: 好
+    else 失败
+        B-->>A: 不好
+    end
+` : undefined);

@@ -4,7 +4,11 @@ import { ViewPlugin, type EditorView, type ViewUpdate } from '@codemirror/view';
 import { mountBlockEditor, type BlockEditor, type EditHost, type EditorState } from './blockEditor';
 import { findMermaidBlocks, parseFlowchart } from './flowchart';
 import { blockChange, locate } from './writeBack';
-import { isFlowchartSource, isPluginSource, renderMermaid, type RenderSettings } from './mermaidRender';
+import { copyDiagramSource } from './copySource';
+import { diagramKind, isPluginSource, renderMermaid, type RenderSettings } from './mermaidRender';
+import { purgePluginDom } from './obsidianRender';
+import { mountSequenceEditor } from './sequenceEditor';
+import { parseSequence } from './sequence';
 
 /** 一个代码块的位置：笔记路径 + 开头围栏所在行（从 0 开始）。 */
 interface BlockRef { path: string; line: number }
@@ -12,12 +16,16 @@ interface BlockRef { path: string; line: number }
 /** 当前正在编辑的代码块。宿主界面因写回而重建后，据此自动恢复编辑状态。 */
 interface Session extends BlockRef { state: EditorState; undo: [string, string][]; redo: [string, string][] }
 
-/** 是流程图就显示“编辑”按钮；能否编辑在点击时再检查，并告诉用户具体原因。 */
-const isFlowchart = isFlowchartSource;
+/** 插件渲染的流程图和时序图都可以编辑；能否编辑在点击时再检查，并告诉用户具体原因。 */
+const editable = (source: string) => diagramKind(source) === 'flowchart' || diagramKind(source) === 'sequence';
 
-/** 无法编辑时返回原因。 */
+/** 无法编辑时返回原因。流程图和时序图各自用自己的解析器。 */
 function problem(source: string): string | null {
-  try { parseFlowchart(source); return null; } catch (error) { return error instanceof Error ? error.message : String(error); }
+  try {
+    if (diagramKind(source) === 'sequence') parseSequence(source);
+    else parseFlowchart(source);
+    return null;
+  } catch (error) { return error instanceof Error ? error.message : String(error); }
 }
 
 function explain(reason: string) {
@@ -27,7 +35,11 @@ function explain(reason: string) {
 export class InlineEditing {
   private session?: Session;
   private mounted = new Map<HTMLElement, BlockEditor>();
-  /** 实时预览里找到流程图块时调用，用来换成插件自己的渲染。 */
+  /** 还没执行的延迟回调（等 Obsidian 画完图、防抖动），禁用插件时要一起清掉。 */
+  private timers = new Set<number>();
+  /** 插件已被禁用：之后所有回调都必须立刻返回，不要再往页面上加东西。 */
+  private disposed = false;
+  /** 实时预览里找到流程图或时序图时调用，用来换成插件自己的渲染。 */
   onLiveEmbed?: (embed: HTMLElement, source: string) => void;
   /** 退出编辑后调用：编辑期间不画只读图，这时按最新源码补画。 */
   onExit?: (host: HTMLElement, source: string) => void;
@@ -54,14 +66,35 @@ export class InlineEditing {
       }
       update(update: ViewUpdate) { if (update.docChanged || update.viewportChanged) this.schedule(); }
       destroy() { this.observer.disconnect(); window.clearTimeout(this.timer); }
-      private schedule() { window.clearTimeout(this.timer); this.timer = window.setTimeout(() => self.live(this.view), 60); }
+      private schedule() {
+        if (self.disposed) return;
+        window.clearTimeout(this.timer);
+        this.timer = window.setTimeout(() => self.live(this.view), 60);
+      }
       private now() {
-        if (this.pending) return;
+        if (this.pending || self.disposed) return;
         this.pending = true;
         queueMicrotask(() => { this.pending = false; window.clearTimeout(this.timer); self.live(this.view); });
       }
     }));
-    this.plugin.register(() => { for (const editor of this.mounted.values()) editor.dispose(); this.mounted.clear(); });
+    this.plugin.register(() => this.dispose());
+  }
+
+  /** 禁用插件时：停掉定时器和观察器（观察器随编辑器扩展一起卸下）、卸掉编辑页，再清掉注入的节点和 class。 */
+  dispose() {
+    this.disposed = true;
+    for (const timer of this.timers) window.clearTimeout(timer);
+    this.timers.clear();
+    this.session = undefined;
+    for (const editor of this.mounted.values()) editor.dispose();
+    this.mounted.clear();
+    purgePluginDom(this.plugin.app);
+  }
+
+  /** 延迟执行，禁用插件后自动作废。 */
+  private defer(run: () => void, delay = 0) {
+    const timer = window.setTimeout(() => { this.timers.delete(timer); if (!this.disposed) run(); }, delay);
+    this.timers.add(timer);
   }
 
   /** 命令入口：编辑光标所在的 Mermaid 图。把光标移出代码块，实时预览才会显示图本身。 */
@@ -77,7 +110,7 @@ export class InlineEditing {
     this.schedule(view);
   }
 
-  private schedule(view: EditorView) { window.setTimeout(() => this.live(view), 60); }
+  private schedule(view: EditorView) { this.defer(() => this.live(view), 60); }
 
   /** 清掉已离开页面的编辑页；正在编辑的那个留着，等 Obsidian 重建好代码块后搬过去。 */
   private sweep() {
@@ -123,22 +156,23 @@ export class InlineEditing {
 
   /** 阅读视图：图画好后调用。通过 getSectionInfo 找到代码块，写回用 vault.process。实时预览里的图交给 live() 处理。 */
   attach(el: HTMLElement, ctx: MarkdownPostProcessorContext) {
-    window.setTimeout(() => {
+    this.defer(() => {
       if (!el.isConnected || el.closest('.cm-editor')) return;
       const info = ctx.getSectionInfo(el);
       if (!info) return;
       const block = findMermaidBlocks(info.text).find(b => b.start === info.lineStart);
-      if (!block || !isFlowchart(block.source)) return;
+      if (!block || !editable(block.source)) return;
       const ref: BlockRef = { path: ctx.sourcePath, line: info.lineStart };
       const child = new MarkdownRenderChild(el);
       ctx.addChild(child);
       child.register(() => { this.mounted.get(el)?.dispose(); this.mounted.delete(el); });
-      this.decorate(el, ref, () => this.readingHost(ref), button => this.toggleSource(el, ref, button));
-    }, 0);
+      this.decorate(el, ref, () => this.readingHost(ref), button => this.toggleSource(el, ref, button), diagramKind(block.source) === 'sequence' ? 'sequence' : 'flowchart');
+    });
   }
 
-  /** 实时预览：在编辑器里找到已渲染的代码块，按 DOM 位置反查源码行。 */
-  private live(view: EditorView) {
+  /** 实时预览：在编辑器里找到已渲染的代码块，按 DOM 位置反查源码行。测试替身也走这里。 */
+  live(view: EditorView) {
+    if (this.disposed) return;
     this.sweep();
     const file = view.state.field(editorInfoField, false)?.file;
     if (!file) return;
@@ -149,33 +183,33 @@ export class InlineEditing {
       try { line = view.state.doc.lineAt(view.posAtDOM(embed)).number - 1; } catch { continue; }
       const block = blocks.find(b => line >= b.start && line <= b.end) ?? blocks.find(b => Math.abs(b.start - line) <= 1);
       if (!block || !isPluginSource(block.source)) continue;
-      // 时序图只换成插件画的图，不提供编辑。
-      if (!isFlowchart(block.source)) { this.onLiveEmbed?.(embed, block.source); continue; }
+      if (!editable(block.source)) { this.onLiveEmbed?.(embed, block.source); continue; }
       const ref: BlockRef = { path: file.path, line: block.start };
       this.claim(embed, file.path, block.start, block.source);
       this.onLiveEmbed?.(embed, block.source);
-      this.decorate(embed, ref, () => this.liveHost(view, ref), () => this.revealSource(view, ref));
+      this.decorate(embed, ref, () => this.liveHost(view, ref), () => this.revealSource(view, ref), diagramKind(block.source) === 'sequence' ? 'sequence' : 'flowchart');
     }
   }
 
   /** 给图加“源码 / 编辑”工具条；如果它正是当前会话的代码块，直接恢复编辑。 */
-  private decorate(host: HTMLElement, ref: BlockRef, makeHost: () => EditHost & { read(): Promise<string | null> }, showSource: (button: HTMLButtonElement) => void) {
+  private decorate(host: HTMLElement, ref: BlockRef, makeHost: () => EditHost & { read(): Promise<string | null> }, showSource: (button: HTMLButtonElement) => void, kind: 'flowchart' | 'sequence') {
     host.classList.add('mp-edit-host');
     if (!host.querySelector(':scope > .mp-entry-bar')) {
       const doc = host.ownerDocument;
       const bar = doc.createElement('div');
       bar.className = 'mp-entry-bar';
-      bar.setAttribute('role', 'toolbar'); bar.setAttribute('aria-label', '流程图操作');
+      const label = kind === 'sequence' ? '时序图操作' : '流程图操作';
+      bar.setAttribute('role', 'toolbar'); bar.setAttribute('aria-label', label);
       // 阻止点击传到实时预览，否则光标会跳进代码块、图被源码替换。
       bar.addEventListener('mousedown', event => { event.preventDefault(); event.stopPropagation(); });
-      const button = (label: string, title: string, action: (b: HTMLButtonElement) => void) => {
+      const button = (text: string, title: string, action: (b: HTMLButtonElement) => void) => {
         const b = doc.createElement('button');
-        b.type = 'button'; b.className = 'mp-entry-button'; b.textContent = label; b.setAttribute('aria-label', title);
+        b.type = 'button'; b.className = 'mp-entry-button'; b.textContent = text; b.title = title; b.setAttribute('aria-label', title);
         b.addEventListener('click', event => { event.preventDefault(); event.stopPropagation(); action(b); });
         bar.append(b);
       };
-      button('源码', '显示这张图的 Mermaid 源码', showSource);
-      button('编辑', '在图上编辑这张流程图', () => {
+      button('源码', '显示源码并复制到剪贴板', showSource);
+      button('编辑', kind === 'sequence' ? '在图上编辑这张时序图' : '在图上编辑这张流程图', () => {
         this.session = { ...ref, state: {}, undo: [], redo: [] };
         void this.open(host, ref, makeHost());
       });
@@ -191,20 +225,22 @@ export class InlineEditing {
     if (s && s.path === ref.path && s.line === ref.line) void this.open(host, ref, makeHost());
   }
 
-  /** 实时预览：把光标放到代码块第一行，Obsidian 随即显示源码。 */
+  /** 实时预览：把光标放到代码块第一行，Obsidian 随即显示源码，并复制源码。 */
   private revealSource(view: EditorView, ref: BlockRef) {
     const block = findMermaidBlocks(view.state.doc.toString()).find(b => b.start === ref.line);
     if (!block) { new Notice('找不到这张图的源码，可能被移走或改过了。'); return; }
     const line = view.state.doc.line(Math.min(block.start + 2, block.end + 1));
     view.dispatch({ selection: { anchor: line.from }, scrollIntoView: true });
     view.focus();
+    this.defer(() => void this.copySource(view.dom, block.source));
   }
 
-  /** 阅读视图：在图下方展开 / 收起只读源码。 */
+  /** 阅读视图：在图下方展开 / 收起只读源码。展开时复制，收起时不复制。 */
   private toggleSource(host: HTMLElement, ref: BlockRef, button: HTMLButtonElement) {
     const shown = host.querySelector(':scope > .mp-source-view');
     if (shown) { shown.remove(); button.textContent = '源码'; return; }
     void this.readingHost(ref).read().then(source => {
+      if (this.disposed) return;
       if (source === null) { new Notice('找不到这张图的源码，可能被移走或改过了。'); return; }
       if (host.querySelector(':scope > .mp-source-view')) return;
       const pre = host.ownerDocument.createElement('pre');
@@ -212,12 +248,21 @@ export class InlineEditing {
       const code = host.ownerDocument.createElement('code');
       code.textContent = source; pre.append(code); host.append(pre);
       button.textContent = '收起源码';
+      this.defer(() => void this.copySource(host, source));
     });
+  }
+
+  /** 复制失败只提示，不影响源码已经显示出来。剪贴板用宿主所在窗口，弹出窗口也能复制。 */
+  private async copySource(host: HTMLElement, source: string) {
+    const ok = await copyDiagramSource(host, source);
+    if (this.disposed) return;
+    new Notice(ok ? '已复制源码' : '复制源码失败');
   }
 
   private async open(host: HTMLElement, ref: BlockRef, editHost: EditHost & { read(): Promise<string | null> }) {
     if (this.mounted.has(host)) return;
     const source = await editHost.read();
+    if (this.disposed) return;
     if (source === null) { new Notice('找不到这张图的源码，可能被移走或改过了。'); this.session = undefined; return; }
     const reason = problem(source);
     if (reason) { explain(reason); this.session = undefined; return; }
@@ -225,7 +270,8 @@ export class InlineEditing {
     for (const [other, editor] of this.mounted) if (other !== host) this.release(other, editor);
     host.classList.add('mp-editing');
     const state = this.session && this.session.path === ref.path && this.session.line === ref.line ? this.session.state : {};
-    this.mounted.set(host, mountBlockEditor(host, source, editHost, state));
+    const mount = diagramKind(source) === 'sequence' ? mountSequenceEditor : mountBlockEditor;
+    this.mounted.set(host, mount(host, source, editHost, state));
   }
 
   private close(ref: BlockRef) {
@@ -235,6 +281,7 @@ export class InlineEditing {
 
   /** 编辑页与阅读视图用同一个渲染器和同一套样式。 */
   private async draw(source: string, target: HTMLElement) {
+    if (this.disposed) return;
     await renderMermaid(source, target, this.settings());
   }
 

@@ -17,6 +17,8 @@ const ctx = await context({
   metafile: true,
   plugins: [onlyUsedMermaid],
   legalComments: 'none',
+  // 插件里的中文提示按 UTF-8 原样写入，比默认的 \uXXXX 转义小一些。
+  charset: 'utf8',
   logLevel: 'info',
   banner: { js: '/* Bundled mermaid (MIT License, https://github.com/mermaid-js/mermaid) and its dependencies; see their package licenses. */' },
 });

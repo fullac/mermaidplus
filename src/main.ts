@@ -1,5 +1,5 @@
 // 用途：插件入口——用插件自带的渲染器和样式画流程图，在图上原位可视化编辑并写回笔记；提供样式设置。
-import { App, Notice, Plugin, PluginSettingTab, Setting } from 'obsidian';
+import { App, MarkdownView, Notice, Plugin, PluginSettingTab, Setting } from 'obsidian';
 import type { EditorView } from '@codemirror/view';
 import { InlineEditing } from './obsidianEdit';
 import { DiagramBlocks } from './obsidianRender';
@@ -63,8 +63,8 @@ export default class MermaidPlus extends Plugin {
 
   async onload() {
     const saved = (await this.loadData()) ?? {};
-    // 旧版本的“排版 / 连线拐弯”两项已合并为“连线”。
-    delete saved.layout; delete saved.curve;
+    // 旧版本的“排版 / 连线拐弯”两项已合并为“连线”；0.9 开发中曾写入的迁移标记也丢掉。
+    delete saved.layout; delete saved.curve; delete saved.settingsMigrated;
     this.settings = { ...DEFAULT_RENDER_SETTINGS, ...saved };
     const editing = this.editing = new InlineEditing(this, () => this.settings);
     editing.register();
@@ -74,7 +74,7 @@ export default class MermaidPlus extends Plugin {
     // 切换明暗模式时，“跟随明暗”的图需要重画。
     this.registerEvent(this.app.workspace.on('css-change', () => { if (this.settings.theme === 'auto') this.scheduleRepaint(); }));
     this.addCommand({
-      id: 'edit-flowchart', name: '编辑光标所在的 Mermaid 流程图',
+      id: 'edit-flowchart', name: '编辑光标所在的 Mermaid 图',
       editorCallback: (editor, context) => {
         // Obsidian 的 Editor 在实时预览下带有 CodeMirror 视图（cm），这是官方插件常用的取法。
         const view = (editor as unknown as { cm?: EditorView }).cm;
@@ -84,13 +84,40 @@ export default class MermaidPlus extends Plugin {
     });
   }
 
-  onunload() { window.clearTimeout(this.repaintTimer); }
+  onunload() {
+    window.clearTimeout(this.repaintTimer);
+    // 先把注入的编辑页、图和 class 撤掉，再让 Obsidian 把原生 Mermaid 图重新画出来。
+    this.editing?.dispose();
+    this.blocks?.dispose();
+    // 等 Obsidian 摘掉插件注册的处理器之后再重画，否则刚卸掉的渲染又会把图接回去。
+    window.setTimeout(() => this.restoreNativeDiagrams(), 0);
+  }
+
+  /**
+   * 阅读视图里 Obsidian 生成的原图已被插件删掉，只能整段重画才能拿回来；
+   * 实时预览里原图一直在 DOM 里，只是被加了隐藏用的 class，清掉后让编辑器重画一次就好。
+   */
+  private restoreNativeDiagrams() {
+    for (const leaf of this.app.workspace.getLeavesOfType('markdown')) {
+      const view = leaf.view;
+      if (!(view instanceof MarkdownView)) continue;
+      try {
+        if (view.getMode() === 'preview') { view.previewMode.rerender(true); continue; }
+        const cm = (view.editor as unknown as { cm?: EditorView }).cm;
+        cm?.dispatch({});
+      } catch (error) {
+        console.info('[Mermaid Plus] 没能让 Obsidian 重画原生 Mermaid 图。', error);
+      }
+    }
+  }
 
   async updateSettings(change: Partial<RenderSettings>) {
     this.settings = { ...this.settings, ...change };
-    await this.saveData(this.settings);
+    await this.persist();
     this.scheduleRepaint();
   }
+
+  private persist() { return this.saveData(this.settings); }
 
   private scheduleRepaint() {
     window.clearTimeout(this.repaintTimer);

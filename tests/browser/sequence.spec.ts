@@ -20,9 +20,9 @@ async function draw(page: Page, density?: string, edges?: string) {
   return svg;
 }
 
-test('时序图按插件设置渲染：近白色背景、14px 字号', async ({ page }) => {
+test('时序图按插件设置渲染：SVG 本身透明（底色画在外层容器）、14px 字号', async ({ page }) => {
   const svg = await draw(page);
-  expect(await svg.evaluate(el => (el as SVGSVGElement).style.backgroundColor)).toBe('rgb(250, 250, 250)');
+  expect(await svg.evaluate(el => (el as SVGSVGElement).style.backgroundColor)).toBe('transparent');
   const size = await svg.locator('text.messageText').first().evaluate(el => getComputedStyle(el).fontSize);
   expect(size).toBe('14px');
   expect(await svg.evaluate(el => (el as SVGSVGElement).dataset.mpEdges)).toBe('curved');
