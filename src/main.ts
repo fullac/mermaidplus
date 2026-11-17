@@ -32,6 +32,8 @@ class StyleSettingTab extends PluginSettingTab {
     new Setting(containerEl).setName('紧凑程度')
       .addDropdown(d => d.addOptions({ compact: '紧凑', normal: '适中', loose: '宽松' })
         .setValue(s.density).onChange(v => save({ density: v as Density })));
+    new Setting(containerEl).setName('适应窗口宽度')
+      .addToggle(t => t.setValue(s.fitWidth).onChange(on => save({ fitWidth: on })));
 
     new Setting(containerEl).setName('外观').setHeading();
     new Setting(containerEl).setName('主题')

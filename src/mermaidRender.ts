@@ -33,9 +33,11 @@ export interface RenderSettings {
   autoDirection: boolean;
   /** 图的背景色（CSS 颜色）；留空表示透明，跟随笔记背景。 */
   background: string;
+  /** 适应窗口宽度：比笔记栏宽的图整张等比缩小到栏宽，不再横向滚动；比栏窄的图保持原大小。只改显示，不改排版。 */
+  fitWidth: boolean;
 }
 
-export const DEFAULT_RENDER_SETTINGS: RenderSettings = { theme: 'default', density: 'compact', fontFamily: '', fontSize: 14, edges: 'curved', hops: 'arc', vertical: false, autoDirection: false, background: '#fafafa' };
+export const DEFAULT_RENDER_SETTINGS: RenderSettings = { theme: 'default', density: 'compact', fontFamily: '', fontSize: 14, edges: 'curved', hops: 'arc', vertical: false, autoDirection: false, background: '#fafafa', fitWidth: false };
 
 /** 节点间距、层间距、节点内边距、整图留白。宽松即 Mermaid 默认值。 */
 export const DENSITY: Record<Density, { nodeSpacing: number; rankSpacing: number; padding: number; diagramPadding: number }> = {
@@ -52,7 +54,7 @@ export const SEQUENCE_DENSITY: Record<Density, { actorMargin: number; messageMar
 };
 
 const MERMAID_FONT = '"trebuchet ms", verdana, arial, sans-serif';
-/** 阅读视图里宽图的最小显示比例。和方向评分用的 MIN_READABLE_SCALE 分开，改其中一个不影响另一个。 */
+/** 阅读视图里宽图的最小显示比例（“适应窗口宽度”关闭时）。和方向评分用的 MIN_READABLE_SCALE 分开，改其中一个不影响另一个。 */
 export const MIN_DISPLAY_SCALE = 0.65;
 
 function resolveTheme(choice: ThemeChoice, doc: Document) {
@@ -122,15 +124,19 @@ export function renderMermaid(source: string, target: HTMLElement, settings: Ren
         try { avoidText(element); applyLineHops(element); } catch { /* 避让失败时保留 Mermaid 原来的连线 */ }
         edgesOnTop(element);
         const viewWidth = Number(element.getAttribute('viewBox')?.split(/[\s,]+/)[2]);
-        if (viewWidth > 0) {
+        // 适应窗口宽度时不设最小宽度，图随栏宽等比缩小；拖动节点和连线避让也据此不再补最小宽度。
+        if (viewWidth > 0 && !settings.fitWidth) {
           element.dataset.mpMinScale = String(MIN_DISPLAY_SCALE);
           element.style.minWidth = `${viewWidth * MIN_DISPLAY_SCALE}px`;
         }
       }
+      // 标记写在 SVG 上：编辑页把 SVG 搬进自己的画布后，也能按同一开关显示。
+      if (settings.fitWidth) element.dataset.mpFit = 'width';
       bindFunctions?.(element);
       // 旧任务可以完成计算，但不能覆盖同一容器的新请求。
       if (targetRevision.get(target) === revision) {
         target.classList.add('mp-diagram-surface');
+        target.classList.toggle('mp-fit-width', settings.fitWidth);
         target.style.backgroundColor = background;
         markCanvasTone(target, { theme: resolveTheme(settings.theme, doc), background });
         target.replaceChildren(element);

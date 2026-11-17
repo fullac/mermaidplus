@@ -92,6 +92,8 @@ path.mp-selected:not(.mp-edge-hit) { stroke: var(--mp-accent) !important; stroke
 .mp-diagram-svg, .mp-diagram-surface { display: flex; justify-content: safe center; box-sizing: border-box; width: 100%; overflow-x: auto; }
 .mp-diagram-surface { border-radius: 6px; }
 .mp-diagram-svg > svg, .mp-diagram-surface > svg { flex-shrink: 0; height: auto; }
+/* 适应窗口宽度：图最宽等于所在栏，按 viewBox 等比缩放；比栏窄的图仍受 Mermaid 写入的 max-width 限制，保持原大小。 */
+.mp-fit-width > svg, svg[data-mp-fit="width"] { width: 100%; min-width: 0 !important; }
 /* 编辑器里要看到整张图，不沿用阅读视图为了字号设的最小宽度。 */
 .mp-editor-diagram svg { min-width: 0 !important; }
 .mp-render-error { color: var(--text-error, #c00); white-space: pre-wrap; font-size: 12px; }
